@@ -2,6 +2,16 @@ import streamlit as st
 import base64
 import mimetypes
 
+# ---------------- SESSION STATE ----------------
+if "users" not in st.session_state:
+    st.session_state["users"] = {}  # fake database {username: password}
+if "logged_in" not in st.session_state:
+    st.session_state["logged_in"] = False
+if "username" not in st.session_state:
+    st.session_state["username"] = None
+if "show_signup" not in st.session_state:
+    st.session_state["show_signup"] = False
+
 # ------------------- PAGE CONFIG -------------------
 st.set_page_config(
     page_title="Weight Converter",
@@ -38,7 +48,6 @@ def inject_custom_css():
         font-size: 18px;
         margin: 15px 0;
     }
-    /* Special styling for BMI card */
     .bmi-card {
         border-radius: 30px !important;
         font-size: 20px;
@@ -50,29 +59,6 @@ def inject_custom_css():
         text-align: center;
         font-weight: bold;
         margin-bottom: 30px;
-    }
-    .upload-section {
-        background: rgba(255,255,255,0.85);
-        padding: 20px;
-        border-radius: 12px;
-        border: 2px dashed #dee2e6;
-        margin: 20px 0;
-        text-align: center;
-    }
-    /* Style all number inputs */
-    .stNumberInput > div > div > input {
-        background: rgba(255,255,255,0.9);
-        border-radius: 8px;
-        border: 2px solid #ccc;
-        font-size: 18px !important;
-        text-align: center;
-    }
-    .stSelectbox > div > div {
-        background: rgba(255,255,255,0.9);
-        border-radius: 8px;
-        border: 2px solid #ccc;
-        font-size: 18px !important;
-        text-align: center;
     }
     </style>
     """, unsafe_allow_html=True)
@@ -99,22 +85,65 @@ def lbs_to_kg(lbs): return lbs * 0.453592
 
 def get_bmi_category(bmi):
     if bmi < 18.5:
-        return "Underweight", "🔵", "background-color: rgba(0, 123, 255, 0.85); color: white;"  # Blue
+        return "Underweight", "🔵", "background-color: rgba(0, 123, 255, 0.85); color: white;"
     elif 18.5 <= bmi < 25:
-        return "Normal weight", "🟢", "background-color: rgba(40, 167, 69, 0.85); color: white;"  # Green
+        return "Normal weight", "🟢", "background-color: rgba(40, 167, 69, 0.85); color: white;"
     elif 25 <= bmi < 30:
-        return "Overweight", "🟡", "background-color: rgba(255, 193, 7, 0.85); color: white;"  # Yellow
+        return "Overweight", "🟡", "background-color: rgba(255, 193, 7, 0.85); color: white;"
     else:
-        return "Obese", "🔴", "background-color: rgba(220, 53, 69, 0.85); color: white;"  # Red
+        return "Obese", "🔴", "background-color: rgba(220, 53, 69, 0.85); color: white;"
 
-# ------------------- MAIN APP -------------------
-def main():
+# ------------------- LOGIN / SIGNUP -------------------
+def login_page():
+    st.markdown('<div class="title-header">🔑 Login</div>', unsafe_allow_html=True)
+    username = st.text_input("Username")
+    password = st.text_input("Password", type="password")
+
+    if st.button("Login"):
+        if username in st.session_state["users"] and st.session_state["users"][username] == password:
+            st.session_state["logged_in"] = True
+            st.session_state["username"] = username
+            st.success(f"✅ Welcome back, {username}!")
+            st.experimental_rerun()
+        else:
+            st.error("❌ Invalid username or password")
+
+    if st.button("Go to Sign Up"):
+        st.session_state["show_signup"] = True
+        st.experimental_rerun()
+
+def signup_page():
+    st.markdown('<div class="title-header">📝 Sign Up</div>', unsafe_allow_html=True)
+    username = st.text_input("Choose Username")
+    password = st.text_input("Choose Password", type="password")
+
+    if st.button("Create Account"):
+        if username in st.session_state["users"]:
+            st.error("❌ Username already exists")
+        elif username == "" or password == "":
+            st.warning("⚠️ Please enter both username and password")
+        else:
+            st.session_state["users"][username] = password
+            st.success("✅ Account created successfully! Please log in.")
+            st.session_state["show_signup"] = False
+            st.experimental_rerun()
+
+    if st.button("Go to Login"):
+        st.session_state["show_signup"] = False
+        st.experimental_rerun()
+
+# ------------------- APP MAIN PAGE -------------------
+def app_page():
     inject_custom_css()
+    st.markdown(f'<div class="title-header">⚖️ Welcome {st.session_state["username"]}! ⚖️</div>', unsafe_allow_html=True)
 
-    # Title
-    st.markdown('<div class="title-header">⚖️ Weight Scale Converter ⚖️</div>', unsafe_allow_html=True)
+    # Logout
+    if st.button("🚪 Logout"):
+        st.session_state["logged_in"] = False
+        st.session_state["username"] = None
+        st.experimental_rerun()
 
-    # Background uploader
+    # Background
     bg_image = st.file_uploader("Upload background image", type=["jpg", "jpeg", "png"])
     apply_background(bg_image)
 
@@ -168,6 +197,16 @@ def main():
 
     # Footer
     st.markdown('<div class="info-card" style="text-align:center;">💪 Stay healthy and keep tracking! 💪<br><small>Made with ❤️ using Streamlit</small></div>', unsafe_allow_html=True)
+
+# ------------------- MAIN CONTROLLER -------------------
+def main():
+    if not st.session_state["logged_in"]:
+        if st.session_state["show_signup"]:
+            signup_page()
+        else:
+            login_page()
+    else:
+        app_page()
 
 if __name__ == "__main__":
     main()

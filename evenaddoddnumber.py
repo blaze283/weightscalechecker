@@ -1,9 +1,8 @@
 import streamlit as st
 import base64
 import mimetypes
-import json
-import os
-import hashlib
+import sqlite3
+import bcrypt
 
 # =================== CONFIG ===================
 st.set_page_config(
@@ -13,36 +12,46 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-USERS_FILE = "users.json"
+DB_FILE = "users.db"
 
-# =================== SIMPLE PASSWORD HASH (demo) ===================
-def hash_password(pw: str) -> str:
-    # Demo-only hashing (no salt). For real apps, use bcrypt/argon2.
-    return hashlib.sha256(pw.encode("utf-8")).hexdigest()
+# =================== DATABASE SETUP ===================
+def init_db():
+    conn = sqlite3.connect(DB_FILE)
+    cur = conn.cursor()
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            username TEXT PRIMARY KEY,
+            password_hash TEXT NOT NULL
+        )
+    """)
+    conn.commit()
+    conn.close()
 
-# =================== PERSISTENCE ===================
-def load_users() -> dict:
-    if os.path.exists(USERS_FILE):
-        try:
-            with open(USERS_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception:
-            return {}
-    return {}
+def add_user(username: str, password: str):
+    conn = sqlite3.connect(DB_FILE)
+    cur = conn.cursor()
+    hashed = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
+    cur.execute("INSERT INTO users (username, password_hash) VALUES (?, ?)", (username, hashed))
+    conn.commit()
+    conn.close()
 
-def save_users(users: dict) -> None:
-    with open(USERS_FILE, "w", encoding="utf-8") as f:
-        json.dump(users, f, indent=2)
+def get_user(username: str):
+    conn = sqlite3.connect(DB_FILE)
+    cur = conn.cursor()
+    cur.execute("SELECT username, password_hash FROM users WHERE username=?", (username,))
+    user = cur.fetchone()
+    conn.close()
+    return user
 
-# Initialize session state
-if "users" not in st.session_state:
-    st.session_state.users = load_users()
+# =================== SESSION STATE ===================
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
 if "username" not in st.session_state:
     st.session_state.username = None
 if "auth_tab" not in st.session_state:
-    st.session_state.auth_tab = "Login"  # or "Sign Up"
+    st.session_state.auth_tab = "Login"
+
+init_db()
 
 # =================== STYLES ===================
 def inject_custom_css():
@@ -60,16 +69,6 @@ def inject_custom_css():
     .result-card { text-align: center; font-size: 18px; margin: 15px 0; }
     .bmi-card { border-radius: 30px !important; font-size: 20px; font-weight: bold; padding: 20px; }
     .title-header { font-size: 2.2rem; text-align: center; font-weight: bold; margin-bottom: 30px; }
-    .upload-section {
-        background: rgba(255,255,255,0.85); padding: 20px; border-radius: 12px;
-        border: 2px dashed #dee2e6; margin: 20px 0; text-align: center;
-    }
-    .stNumberInput > div > div > input,
-    .stSelectbox > div > div {
-        background: rgba(255,255,255,0.9);
-        border-radius: 8px; border: 2px solid #ccc;
-        font-size: 18px !important; text-align: center;
-    }
     </style>
     """, unsafe_allow_html=True)
 
@@ -103,7 +102,7 @@ def get_bmi_category(bmi):
     else:
         return "Obese", "🔴", "background-color: rgba(220, 53, 69, 0.85); color: white;"
 
-# =================== AUTH UI (FORMS) ===================
+# =================== AUTH ===================
 def login_view():
     st.markdown('<div class="title-header">🔑 Login</div>', unsafe_allow_html=True)
     with st.form("login_form", clear_on_submit=False):
@@ -112,12 +111,11 @@ def login_view():
         login_btn = st.form_submit_button("Login")
 
     if login_btn:
-        u = username.strip()
-        p = password
-        if u in st.session_state.users and st.session_state.users[u] == hash_password(p):
+        user = get_user(username.strip())
+        if user and bcrypt.checkpw(password.encode(), user[1].encode()):
             st.session_state.logged_in = True
-            st.session_state.username = u
-            st.toast(f"Welcome back, {u}!", icon="✅")
+            st.session_state.username = user[0]
+            st.toast(f"Welcome back, {user[0]}!", icon="✅")
             st.rerun()
         else:
             st.error("❌ Invalid username or password")
@@ -139,24 +137,16 @@ def signup_view():
             st.warning("⚠️ Username cannot contain spaces.")
             return
         if len(pw1) < 4:
-            st.warning("⚠️ Password must be at least 4 characters (demo constraint).")
+            st.warning("⚠️ Password must be at least 4 characters.")
             return
         if pw1 != pw2:
             st.error("❌ Passwords do not match.")
             return
-        if u in st.session_state.users:
+        if get_user(u):
             st.error("❌ Username already exists.")
             return
 
-        # Save to state + disk
-        st.session_state.users[u] = hash_password(pw1)
-        try:
-            save_users(st.session_state.users)
-        except Exception as e:
-            st.error(f"Could not save user file: {e}")
-            return
-
-        # Auto-login after signup
+        add_user(u, pw1)
         st.session_state.logged_in = True
         st.session_state.username = u
         st.toast("✅ Account created. You are now logged in.", icon="🎉")
@@ -164,11 +154,7 @@ def signup_view():
 
 def auth_gate():
     inject_custom_css()
-    tab = st.segmented_control(
-        "Authentication",
-        options=["Login", "Sign Up"],
-        default=st.session_state.auth_tab
-    )
+    tab = st.segmented_control("Authentication", options=["Login", "Sign Up"], default=st.session_state.auth_tab)
     st.session_state.auth_tab = tab
     if tab == "Login":
         login_view()
@@ -180,17 +166,11 @@ def app_page():
     inject_custom_css()
     st.markdown(f'<div class="title-header">⚖️ Welcome {st.session_state["username"]}! ⚖️</div>', unsafe_allow_html=True)
 
-    top_cols = st.columns([1,1,1])
-    with top_cols[0]:
-        if st.button("🚪 Logout", use_container_width=True):
-            st.session_state.logged_in = False
-            st.session_state.username = None
-            st.toast("Logged out.", icon="👋")
-            st.rerun()
-    with top_cols[1]:
-        pass
-    with top_cols[2]:
-        st.write("")  # spacer
+    if st.button("🚪 Logout", use_container_width=True):
+        st.session_state.logged_in = False
+        st.session_state.username = None
+        st.toast("Logged out.", icon="👋")
+        st.rerun()
 
     # Background
     bg_image = st.file_uploader("Upload background image", type=["jpg", "jpeg", "png"])

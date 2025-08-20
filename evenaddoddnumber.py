@@ -6,7 +6,7 @@ import bcrypt
 
 # =================== CONFIG ===================
 st.set_page_config(
-    page_title="Weight Converter",
+    page_title="Weight Converter & BMI",
     page_icon="⚖️",
     layout="centered",
     initial_sidebar_state="collapsed"
@@ -14,8 +14,9 @@ st.set_page_config(
 
 DB_FILE = "users.db"
 
-# =================== DATABASE SETUP ===================
+# =================== DATABASE ===================
 def init_db():
+    """Initialize user database."""
     conn = sqlite3.connect(DB_FILE)
     cur = conn.cursor()
     cur.execute("""
@@ -28,14 +29,16 @@ def init_db():
     conn.close()
 
 def add_user(username: str, password: str):
+    """Add a new user to the database."""
     conn = sqlite3.connect(DB_FILE)
     cur = conn.cursor()
-    hashed = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
+    hashed = bcrypt.hashpw(password.encode(), bcrypt.gensalt(rounds=12)).decode()
     cur.execute("INSERT INTO users (username, password_hash) VALUES (?, ?)", (username, hashed))
     conn.commit()
     conn.close()
 
 def get_user(username: str):
+    """Retrieve user by username."""
     conn = sqlite3.connect(DB_FILE)
     cur = conn.cursor()
     cur.execute("SELECT username, password_hash FROM users WHERE username=?", (username,))
@@ -50,6 +53,8 @@ if "username" not in st.session_state:
     st.session_state.username = None
 if "auth_tab" not in st.session_state:
     st.session_state.auth_tab = "Login"
+if "bg_uploaded" not in st.session_state:
+    st.session_state.bg_uploaded = None
 
 init_db()
 
@@ -74,9 +79,11 @@ def inject_custom_css():
 
 # =================== BACKGROUND ===================
 def apply_background(bg_image):
+    """Set custom background image."""
     if bg_image is not None:
         mime_type, _ = mimetypes.guess_type(bg_image.name)
         encoded_image = base64.b64encode(bg_image.read()).decode()
+        st.session_state.bg_uploaded = True
         st.markdown(f"""
         <style>
         .stApp {{
@@ -93,6 +100,7 @@ def kg_to_lbs(kg): return kg * 2.20462
 def lbs_to_kg(lbs): return lbs * 0.453592
 
 def get_bmi_category(bmi):
+    """Return BMI category, emoji, and style."""
     if bmi < 18.5:
         return "Underweight", "🔵", "background-color: rgba(0, 123, 255, 0.85); color: white;"
     elif 18.5 <= bmi < 25:
@@ -102,12 +110,17 @@ def get_bmi_category(bmi):
     else:
         return "Obese", "🔴", "background-color: rgba(220, 53, 69, 0.85); color: white;"
 
+def feet_inches_to_meters(feet: float, inches: float) -> float:
+    """Convert feet/inches to meters."""
+    total_inches = (feet * 12) + inches
+    return total_inches * 0.0254
+
 # =================== AUTH ===================
 def login_view():
     st.markdown('<div class="title-header">🔑 Login</div>', unsafe_allow_html=True)
-    with st.form("login_form", clear_on_submit=False):
-        username = st.text_input("Username", key="login_username")
-        password = st.text_input("Password", type="password", key="login_password")
+    with st.form("login_form"):
+        username = st.text_input("Username")
+        password = st.text_input("Password", type="password")
         login_btn = st.form_submit_button("Login")
 
     if login_btn:
@@ -122,118 +135,67 @@ def login_view():
 
 def signup_view():
     st.markdown('<div class="title-header">📝 Sign Up</div>', unsafe_allow_html=True)
-    with st.form("signup_form", clear_on_submit=False):
-        username = st.text_input("Choose Username", key="signup_username")
-        pw1 = st.text_input("Choose Password", type="password", key="signup_pw1")
-        pw2 = st.text_input("Confirm Password", type="password", key="signup_pw2")
+    with st.form("signup_form"):
+        username = st.text_input("Choose Username")
+        pw1 = st.text_input("Choose Password", type="password")
+        pw2 = st.text_input("Confirm Password", type="password")
         create_btn = st.form_submit_button("Create Account")
 
     if create_btn:
         u = username.strip()
         if not u or not pw1 or not pw2:
             st.warning("⚠️ Please fill all fields.")
-            return
-        if " " in u:
+        elif " " in u:
             st.warning("⚠️ Username cannot contain spaces.")
-            return
-        if len(pw1) < 4:
+        elif len(pw1) < 4:
             st.warning("⚠️ Password must be at least 4 characters.")
-            return
-        if pw1 != pw2:
+        elif pw1 != pw2:
             st.error("❌ Passwords do not match.")
-            return
-        if get_user(u):
+        elif get_user(u):
             st.error("❌ Username already exists.")
-            return
-
-        add_user(u, pw1)
-        st.session_state.logged_in = True
-        st.session_state.username = u
-        st.success("🎉 Account created. You are now logged in.")
-        st.rerun()
+        else:
+            add_user(u, pw1)
+            st.session_state.logged_in = True
+            st.session_state.username = u
+            st.success("🎉 Account created. You are now logged in.")
+            st.rerun()
 
 def auth_gate():
     inject_custom_css()
     tab = st.radio("Choose Option", ["Login", "Sign Up"], index=0 if st.session_state.auth_tab == "Login" else 1)
     st.session_state.auth_tab = tab
-    if tab == "Login":
-        login_view()
-    else:
-        signup_view()
+    login_view() if tab == "Login" else signup_view()
 
-# =================== APP PAGE ===================
+# =================== MAIN APP ===================
 def app_page():
     inject_custom_css()
     st.markdown(f'<div class="title-header">⚖️ Welcome {st.session_state["username"]}! ⚖️</div>', unsafe_allow_html=True)
 
     if st.button("🚪 Logout", use_container_width=True):
+        for key in st.session_state.keys():
+            st.session_state[key] = None
         st.session_state.logged_in = False
-        st.session_state.username = None
-        st.info("👋 Logged out.")
+        st.success("👋 Logged out.")
         st.rerun()
 
-    # Background
+    # Upload background image
     bg_image = st.file_uploader("Upload background image", type=["jpg", "jpeg", "png"])
     apply_background(bg_image)
 
-    # Inputs
+    # Weight input
     col1, col2 = st.columns(2)
     with col1:
         st.markdown('<div class="info-card">📏 Select Unit</div>', unsafe_allow_html=True)
-        unit = st.selectbox("", ["Kilograms (kg)", "Pounds (lbs)"], key="unit")
-
+        unit = st.selectbox("", ["Kilograms (kg)", "Pounds (lbs)"])
     with col2:
         st.markdown('<div class="info-card">🔢 Enter Weight</div>', unsafe_allow_html=True)
         weight = st.number_input("", min_value=0.1, max_value=999.9, step=0.1, format="%.1f")
 
-    # Results
     if weight > 0:
         if "Kilograms" in unit:
-            converted_weight = kg_to_lbs(weight)
-            stones = converted_weight / 14
-            ounces = converted_weight * 16
+            converted = kg_to_lbs(weight)
+            stones = converted / 14
+            ounces = converted * 16
             grams = weight * 1000
         else:
-            converted_weight = lbs_to_kg(weight)
-            stones = weight / 14
-            ounces = weight * 16
-            grams = converted_weight * 1000
-
-        st.markdown(f'''
-        <div class="result-card">
-            🎯 Conversion Result:<br><b>{weight:.1f} {unit} = {converted_weight:.1f} {'lbs' if "Kilograms" in unit else 'kg'}</b>
-        </div>
-        ''', unsafe_allow_html=True)
-
-        col3, col4, col5 = st.columns(3)
-        col3.markdown(f'<div class="metric-card">🪨 Stones<br>{stones:.1f}</div>', unsafe_allow_html=True)
-        col4.markdown(f'<div class="metric-card">⚖️ Ounces<br>{ounces:.0f}</div>', unsafe_allow_html=True)
-        col5.markdown(f'<div class="metric-card">📊 Grams<br>{grams:.0f}</div>', unsafe_allow_html=True)
-
-        # BMI Calculator
-        st.markdown('<div class="info-card">🧮 Quick BMI Calculator</div>', unsafe_allow_html=True)
-        st.markdown('<div class="info-card">📏 Enter Your Height (m)</div>', unsafe_allow_html=True)
-        height = st.number_input("", min_value=0.5, max_value=3.0, step=0.01, value=1.70)
-
-        if height > 0:
-            weight_kg = weight if "Kilograms" in unit else converted_weight
-            bmi = weight_kg / (height ** 2)
-            category, emoji, style = get_bmi_category(bmi)
-            st.markdown(f'<div class="result-card bmi-card" style="{style}">{emoji} BMI: {bmi:.1f} ({category})</div>', unsafe_allow_html=True)
-    else:
-        st.markdown('<div class="info-card">👆 Enter your weight above to see conversions!</div>', unsafe_allow_html=True)
-
-    # Footer
-    st.markdown('<div class="info-card" style="text-align:center;">💪 Stay healthy and keep tracking! 💪<br><small>Made with ❤️ using Streamlit</small></div>', unsafe_allow_html=True)
-
-# =================== CONTROLLER ===================
-def main():
-    if not st.session_state.logged_in:
-        auth_gate()
-    else:
-        app_page()
-
-if __name__ == "__main__":
-    main()
-
-
+            converted = lbs_to_kg

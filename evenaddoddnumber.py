@@ -1,201 +1,130 @@
 import streamlit as st
-import base64
-import mimetypes
-import sqlite3
-import bcrypt
 
-# =================== CONFIG ===================
-st.set_page_config(
-    page_title="Weight Converter & BMI",
-    page_icon="⚖️",
-    layout="centered",
-    initial_sidebar_state="collapsed"
-)
+# =================== DATA ===================
+restaurants = [
+    {
+        "id": "1",
+        "name": "Mama's Italian Kitchen",
+        "cuisine": "Italian • Pizza • Pasta",
+        "rating": 4.8,
+        "delivery_time": "25-35 min",
+        "delivery_fee": "Free",
+    },
+    {
+        "id": "2",
+        "name": "Tokyo Sushi Bar",
+        "cuisine": "Japanese • Sushi • Asian",
+        "rating": 4.7,
+        "delivery_time": "30-40 min",
+        "delivery_fee": "$2.99",
+    },
+    {
+        "id": "3",
+        "name": "El Mariachi",
+        "cuisine": "Mexican • Tacos • Burritos",
+        "rating": 4.6,
+        "delivery_time": "20-30 min",
+        "delivery_fee": "$1.99",
+    },
+]
 
-DB_FILE = "users.db"
-
-# =================== DATABASE ===================
-def init_db():
-    """Initialize user database."""
-    conn = sqlite3.connect(DB_FILE)
-    cur = conn.cursor()
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS users (
-            username TEXT PRIMARY KEY,
-            password_hash TEXT NOT NULL
-        )
-    """)
-    conn.commit()
-    conn.close()
-
-def add_user(username: str, password: str):
-    """Add a new user to the database."""
-    conn = sqlite3.connect(DB_FILE)
-    cur = conn.cursor()
-    hashed = bcrypt.hashpw(password.encode(), bcrypt.gensalt(rounds=12)).decode()
-    cur.execute("INSERT INTO users (username, password_hash) VALUES (?, ?)", (username, hashed))
-    conn.commit()
-    conn.close()
-
-def get_user(username: str):
-    """Retrieve user by username."""
-    conn = sqlite3.connect(DB_FILE)
-    cur = conn.cursor()
-    cur.execute("SELECT username, password_hash FROM users WHERE username=?", (username,))
-    user = cur.fetchone()
-    conn.close()
-    return user
+menu_items = {
+    "1": [
+        {"id": "item-1", "name": "Margherita Pizza", "desc": "Fresh mozzarella, tomato sauce, basil", "price": 16.99},
+        {"id": "item-2", "name": "Spaghetti Carbonara", "desc": "Pasta with eggs, pecorino, pancetta", "price": 18.99},
+        {"id": "item-3", "name": "Chicken Parmigiana", "desc": "Breaded chicken with marinara sauce", "price": 22.99},
+    ],
+    "2": [
+        {"id": "item-5", "name": "Salmon Sashimi", "desc": "Fresh Atlantic salmon", "price": 24.99},
+        {"id": "item-6", "name": "Dragon Roll", "desc": "Shrimp tempura, avocado, eel, spicy mayo", "price": 18.99},
+        {"id": "item-7", "name": "Chicken Teriyaki Bowl", "desc": "Grilled chicken, rice, veggies", "price": 16.99},
+    ],
+    "3": [
+        {"id": "item-9", "name": "Carne Asada Tacos", "desc": "Grilled steak, onions, cilantro", "price": 14.99},
+        {"id": "item-10", "name": "Chicken Burrito Bowl", "desc": "Chicken, rice, beans, pico de gallo", "price": 13.99},
+        {"id": "item-11", "name": "Veggie Quesadilla", "desc": "Bell peppers, onions, mushrooms", "price": 11.99},
+    ],
+}
 
 # =================== SESSION STATE ===================
-if "logged_in" not in st.session_state:
-    st.session_state.logged_in = False
-if "username" not in st.session_state:
-    st.session_state.username = None
-if "auth_tab" not in st.session_state:
-    st.session_state.auth_tab = "Login"
-if "bg_uploaded" not in st.session_state:
-    st.session_state.bg_uploaded = None
+if "selected_restaurant" not in st.session_state:
+    st.session_state.selected_restaurant = None
 
-init_db()
+if "cart" not in st.session_state:
+    st.session_state.cart = {}
 
-# =================== STYLES ===================
-def inject_custom_css():
-    st.markdown("""
-    <style>
-    * { font-family: 'Segoe UI', sans-serif; }
-    .main-container { max-width: 800px; margin: 0 auto; padding: 20px; }
-    .metric-card, .result-card, .info-card, .title-header {
-        background: rgba(255,255,255,0.85);
-        padding: 20px; border-radius: 12px;
-        box-shadow: 0 4px 15px rgba(0,0,0,0.1);
-        color: black;
-    }
-    .metric-card { text-align: center; font-weight: bold; }
-    .result-card { text-align: center; font-size: 18px; margin: 15px 0; }
-    .bmi-card { border-radius: 30px !important; font-size: 20px; font-weight: bold; padding: 20px; }
-    .title-header { font-size: 2.2rem; text-align: center; font-weight: bold; margin-bottom: 30px; }
-    </style>
-    """, unsafe_allow_html=True)
-
-# =================== BACKGROUND ===================
-def apply_background(bg_image):
-    """Set custom background image."""
-    if bg_image is not None:
-        mime_type, _ = mimetypes.guess_type(bg_image.name)
-        encoded_image = base64.b64encode(bg_image.read()).decode()
-        st.session_state.bg_uploaded = True
-        st.markdown(f"""
-        <style>
-        .stApp {{
-            background-image: url("data:{mime_type};base64,{encoded_image}");
-            background-size: cover;
-            background-position: center;
-            background-attachment: fixed;
-        }}
-        </style>
-        """, unsafe_allow_html=True)
-
-# =================== CONVERSIONS ===================
-def kg_to_lbs(kg): return kg * 2.20462
-def lbs_to_kg(lbs): return lbs * 0.453592
-
-def get_bmi_category(bmi):
-    """Return BMI category, emoji, and style."""
-    if bmi < 18.5:
-        return "Underweight", "🔵", "background-color: rgba(0, 123, 255, 0.85); color: white;"
-    elif 18.5 <= bmi < 25:
-        return "Normal weight", "🟢", "background-color: rgba(40, 167, 69, 0.85); color: white;"
-    elif 25 <= bmi < 30:
-        return "Overweight", "🟡", "background-color: rgba(255, 193, 7, 0.85); color: white;"
+# =================== FUNCTIONS ===================
+def add_to_cart(item):
+    cart = st.session_state.cart
+    if item["id"] in cart:
+        cart[item["id"]]["quantity"] += 1
     else:
-        return "Obese", "🔴", "background-color: rgba(220, 53, 69, 0.85); color: white;"
+        cart[item["id"]] = {"name": item["name"], "price": item["price"], "quantity": 1}
 
-def feet_inches_to_meters(feet: float, inches: float) -> float:
-    """Convert feet/inches to meters."""
-    total_inches = (feet * 12) + inches
-    return total_inches * 0.0254
-
-# =================== AUTH ===================
-def login_view():
-    st.markdown('<div class="title-header">🔑 Login</div>', unsafe_allow_html=True)
-    with st.form("login_form"):
-        username = st.text_input("Username")
-        password = st.text_input("Password", type="password")
-        login_btn = st.form_submit_button("Login")
-
-    if login_btn:
-        user = get_user(username.strip())
-        if user and bcrypt.checkpw(password.encode(), user[1].encode()):
-            st.session_state.logged_in = True
-            st.session_state.username = user[0]
-            st.success(f"✅ Welcome back, {user[0]}!")
-            st.rerun()
+def remove_from_cart(item):
+    cart = st.session_state.cart
+    if item["id"] in cart:
+        if cart[item["id"]]["quantity"] > 1:
+            cart[item["id"]]["quantity"] -= 1
         else:
-            st.error("❌ Invalid username or password")
+            del cart[item["id"]]
 
-def signup_view():
-    st.markdown('<div class="title-header">📝 Sign Up</div>', unsafe_allow_html=True)
-    with st.form("signup_form"):
-        username = st.text_input("Choose Username")
-        pw1 = st.text_input("Choose Password", type="password")
-        pw2 = st.text_input("Confirm Password", type="password")
-        create_btn = st.form_submit_button("Create Account")
+def checkout():
+    st.success("✅ Order placed! Your food is on the way 🚚🍴")
+    st.session_state.cart.clear()
+    st.session_state.selected_restaurant = None
 
-    if create_btn:
-        u = username.strip()
-        if not u or not pw1 or not pw2:
-            st.warning("⚠️ Please fill all fields.")
-        elif " " in u:
-            st.warning("⚠️ Username cannot contain spaces.")
-        elif len(pw1) < 4:
-            st.warning("⚠️ Password must be at least 4 characters.")
-        elif pw1 != pw2:
-            st.error("❌ Passwords do not match.")
-        elif get_user(u):
-            st.error("❌ Username already exists.")
-        else:
-            add_user(u, pw1)
-            st.session_state.logged_in = True
-            st.session_state.username = u
-            st.success("🎉 Account created. You are now logged in.")
-            st.rerun()
+# =================== UI ===================
+st.title("🍽️ Food Delivery App")
 
-def auth_gate():
-    inject_custom_css()
-    tab = st.radio("Choose Option", ["Login", "Sign Up"], index=0 if st.session_state.auth_tab == "Login" else 1)
-    st.session_state.auth_tab = tab
-    login_view() if tab == "Login" else signup_view()
+# CART SUMMARY BUTTON
+cart_count = sum(item["quantity"] for item in st.session_state.cart.values())
+if cart_count > 0:
+    if st.button(f"🛒 Cart ({cart_count})"):
+        st.session_state.selected_restaurant = "cart"
 
-# =================== MAIN APP ===================
-def app_page():
-    inject_custom_css()
-    st.markdown(f'<div class="title-header">⚖️ Welcome {st.session_state["username"]}! ⚖️</div>', unsafe_allow_html=True)
+# ----------------- CART PAGE -----------------
+if st.session_state.selected_restaurant == "cart":
+    st.header("🛒 Your Cart")
+    if not st.session_state.cart:
+        st.info("Your cart is empty.")
+    else:
+        total = 0
+        for item in st.session_state.cart.values():
+            st.write(f"{item['name']} - ${item['price']} x {item['quantity']}")
+            total += item["price"] * item["quantity"]
+        st.subheader(f"Total: ${total:.2f}")
+        if st.button("✅ Checkout"):
+            checkout()
+    if st.button("⬅️ Continue Shopping"):
+        st.session_state.selected_restaurant = None
 
-    if st.button("🚪 Logout", use_container_width=True):
-        for key in st.session_state.keys():
-            st.session_state[key] = None
-        st.session_state.logged_in = False
-        st.success("👋 Logged out.")
-        st.rerun()
+# ----------------- MENU PAGE -----------------
+elif st.session_state.selected_restaurant:
+    restaurant = next(r for r in restaurants if r["id"] == st.session_state.selected_restaurant)
+    st.header(restaurant["name"])
+    st.caption(f"{restaurant['cuisine']} | ⭐ {restaurant['rating']} | ⏱ {restaurant['delivery_time']} | {restaurant['delivery_fee']}")
 
-    # Upload background image
-    bg_image = st.file_uploader("Upload background image", type=["jpg", "jpeg", "png"])
-    apply_background(bg_image)
+    for item in menu_items[restaurant["id"]]:
+        col1, col2 = st.columns([3,1])
+        with col1:
+            st.write(f"**{item['name']}** - ${item['price']}")
+            st.caption(item["desc"])
+        with col2:
+            if st.button(f"Add {item['id']}", key=item["id"]):
+                add_to_cart(item)
+            if item["id"] in st.session_state.cart:
+                qty = st.session_state.cart[item["id"]]["quantity"]
+                st.write(f"Qty: {qty}")
+                if st.button(f"Remove {item['id']}", key=item["id"]+"remove"):
+                    remove_from_cart(item)
 
-    # Weight input
-    col1, col2 = st.columns(2)
-    with col1:
-        st.markdown('<div class="info-card">📏 Select Unit</div>', unsafe_allow_html=True)
-        unit = st.selectbox("", ["Kilograms (kg)", "Pounds (lbs)"])
-    with col2:
-        st.markdown('<div class="info-card">🔢 Enter Weight</div>', unsafe_allow_html=True)
-        weight = st.number_input("", min_value=0.1, max_value=999.9, step=0.1, format="%.1f")
+    if st.button("⬅️ Back to Restaurants"):
+        st.session_state.selected_restaurant = None
 
-    if weight > 0:
-        if "Kilograms" in unit:
-            converted = kg_to_lbs(weight)
-            stones = converted / 14
-            ounces = converted * 16
-            grams = weight * 1000
-        else:
-            converted = lbs_to_kg
+# ----------------- RESTAURANTS PAGE -----------------
+else:
+    st.subheader("🍴 Popular Restaurants")
+    for r in restaurants:
+        if st.button(r["name"], key=r["id"]):
+            st.session_state.selected_restaurant = r["id"]

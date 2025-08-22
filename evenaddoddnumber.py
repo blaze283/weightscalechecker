@@ -2,7 +2,7 @@ import streamlit as st
 import base64
 import mimetypes
 import sqlite3
-import bcrypt   # ✅ Needed for password hashing
+
 
 
 # =================== CONFIG ===================
@@ -275,3 +275,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

@@ -1,6 +1,10 @@
 import streamlit as st
 import base64
 import sqlite3
+import mimetypes
+
+# ------------------- CONFIG -------------------
+st.set_page_config(page_title="BMI & Diet App", layout="centered")
 
 # ------------------- DATABASE -------------------
 def init_db():
@@ -17,11 +21,15 @@ def init_db():
     conn.close()
 
 def add_user(username, password):
-    conn = sqlite3.connect("users.db")
-    cur = conn.cursor()
-    cur.execute("INSERT INTO users (username, password) VALUES (?, ?)", (username, password))
-    conn.commit()
-    conn.close()
+    try:
+        conn = sqlite3.connect("users.db")
+        cur = conn.cursor()
+        cur.execute("INSERT INTO users (username, password) VALUES (?, ?)", (username, password))
+        conn.commit()
+        conn.close()
+        return True
+    except:
+        return False
 
 def get_user(username, password):
     conn = sqlite3.connect("users.db")
@@ -32,11 +40,13 @@ def get_user(username, password):
     return user
 
 # ------------------- BACKGROUND -------------------
-def set_background(encoded_image):
+def set_background(uploaded_file):
+    mime_type, _ = mimetypes.guess_type(uploaded_file.name)
+    encoded = base64.b64encode(uploaded_file.getvalue()).decode()
     page_bg = f"""
     <style>
     .stApp {{
-        background-image: url("data:image/png;base64,{encoded_image}");
+        background-image: url("data:{mime_type};base64,{encoded}");
         background-size: cover;
     }}
     </style>
@@ -57,9 +67,9 @@ def get_bmi_category(bmi):
 def get_diet_plan(category):
     plans = {
         "Underweight": "🍽️ Eat high-calorie nutritious foods. Add protein shakes and 5–6 meals/day.",
-        "Normal weight": "🥗 Maintain a balanced diet (fruits, veggies, protein). Exercise regularly.",
-        "Overweight": "🥦 Eat low-calorie, high-fiber foods. Cut sugar and carbs. Stay active.",
-        "Obese": "🥬 Focus on veggies, lean protein, whole grains. Avoid junk food and consult a doctor."
+        "Normal weight": "🥗 Balanced diet with fruits, veggies, protein. Keep active.",
+        "Overweight": "🥦 Low-calorie, high-fiber foods. Cut sugar and carbs.",
+        "Obese": "🥬 Focus on veggies, lean protein, whole grains. Consult a doctor."
     }
     return plans.get(category, "⚠️ No plan available.")
 
@@ -70,11 +80,10 @@ def signup_page():
     password = st.text_input("Password", type="password")
     if st.button("Sign Up"):
         if username and password:
-            try:
-                add_user(username, password)
+            if add_user(username, password):
                 st.success("✅ Account created! Please login.")
                 st.session_state.page = "login"
-            except:
+            else:
                 st.error("⚠️ Username already exists.")
         else:
             st.warning("⚠️ Enter both fields.")
@@ -90,25 +99,25 @@ def login_page():
             st.session_state.page = "app"
         else:
             st.error("❌ Invalid username or password.")
+    if st.button("Go to Sign Up"):
+        st.session_state.page = "signup"
 
 def app_page():
     st.subheader(f"Welcome {st.session_state.user}! 🎉")
-    st.write("Upload a background if you like:")
-    bg_image = st.file_uploader("Choose image", type=["png", "jpg", "jpeg"])
-    if bg_image:
-        encoded_image = base64.b64encode(bg_image.getvalue()).decode()
-        set_background(encoded_image)
 
-    unit = st.radio("Select Unit", ["Kilograms", "Pounds"], horizontal=True)
+    bg_image = st.file_uploader("Upload a background", type=["png", "jpg", "jpeg"])
+    if bg_image:
+        set_background(bg_image)
+
+    unit = st.radio("Select Unit", ["Kilograms", "Pounds"])
     weight = st.number_input(f"Enter weight ({unit})", step=0.1)
     height = st.number_input("Enter height (m)", step=0.01)
 
     if height > 0 and weight > 0:
         if unit == "Pounds":
-            weight = weight * 0.453592  # convert lbs to kg
+            weight *= 0.453592
         bmi = weight / (height ** 2)
         category, emoji = get_bmi_category(bmi)
-
         st.success(f"{emoji} BMI: {bmi:.1f} ({category})")
         st.info(get_diet_plan(category))
 
@@ -118,9 +127,7 @@ def app_page():
 
 # ------------------- MAIN -------------------
 def main():
-    st.set_page_config(page_title="BMI & Diet App", layout="centered")
     init_db()
-
     if "page" not in st.session_state:
         st.session_state.page = "login"
 
@@ -128,10 +135,10 @@ def main():
         signup_page()
     elif st.session_state.page == "login":
         login_page()
-        if st.button("Go to Sign Up"):
-            st.session_state.page = "signup"
     elif st.session_state.page == "app":
         app_page()
 
 if __name__ == "__main__":
     main()
+
+

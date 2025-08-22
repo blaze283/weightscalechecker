@@ -129,9 +129,58 @@ def get_bmi_category(bmi):
             "💧 Drink water instead of soda/juice."
         )
 
+# ------------------- LOGIN SYSTEM -------------------
+def login_system():
+    # Dummy users
+    users = {"admin": "1234", "user": "pass"}
+
+    if "logged_in" not in st.session_state:
+        st.session_state.logged_in = False
+        st.session_state.username = ""
+
+    if not st.session_state.logged_in:
+        st.subheader("🔐 Login / Sign Up")
+
+        tab1, tab2 = st.tabs(["Login", "Sign Up"])
+
+        # Login Tab
+        with tab1:
+            username = st.text_input("Username")
+            password = st.text_input("Password", type="password")
+            if st.button("Login"):
+                if username in users and users[username] == password:
+                    st.session_state.logged_in = True
+                    st.session_state.username = username
+                    st.success(f"✅ Welcome {username}!")
+                    st.rerun()
+                else:
+                    st.error("❌ Invalid credentials")
+
+        # Sign Up Tab
+        with tab2:
+            new_user = st.text_input("New Username")
+            new_pass = st.text_input("New Password", type="password")
+            if st.button("Sign Up"):
+                if new_user in users:
+                    st.error("⚠️ Username already exists!")
+                else:
+                    users[new_user] = new_pass
+                    st.success("🎉 Account created! Please login.")
+    else:
+        st.sidebar.success(f"👋 Welcome {st.session_state.username}")
+        if st.sidebar.button("Logout"):
+            st.session_state.logged_in = False
+            st.session_state.username = ""
+            st.rerun()
+        return True
+    return False
+
 # ------------------- MAIN APP -------------------
 def main():
     inject_custom_css()
+    logged_in = login_system()
+    if not logged_in:
+        return
 
     # Title
     st.markdown('<div class="title-header">⚖️ Weight Scale Converter ⚖️</div>', unsafe_allow_html=True)

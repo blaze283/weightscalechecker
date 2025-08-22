@@ -56,7 +56,7 @@ def set_background(uploaded_file):
 # ------------------- BMI + DIET -------------------
 def get_bmi_category(bmi):
     if bmi < 18.5:
-        return "Underweight", "🟦", "background-color:#d0e7ff;", "🍽️ Eat high-calorie nutritious foods. Add protein shakes and 5–6 meals/day."
+        return "Underweight", "🟦", "background-color:#d0e7ff;", "🥦 Focus on vegetables and fiber-rich foods.\n" "🍎 Limit sugary snacks and fried foods.\n" "🥩 Choose lean proteins (fish, turkey, beans).\n" "🚶 Add more walking or light cardio daily." )
     elif bmi < 25:
         return "Normal weight", "🟩", "background-color:#d6f5d6;", "🥗 Balanced diet with fruits, veggies, protein. Keep active."
     elif bmi < 30:
@@ -154,3 +154,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

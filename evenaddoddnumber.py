@@ -78,6 +78,19 @@ def set_background(uploaded_file):
     """
     st.markdown(page_bg, unsafe_allow_html=True)
 
+# ------------------- TEXT BACKGROUND CSS -------------------
+def apply_text_background():
+    st.markdown("""
+        <style>
+        /* Give all text a background */
+        h1, h2, h3, h4, h5, h6, p, label, .stMarkdown, .stText, .stRadio, .stSelectbox, .stDateInput, .stNumberInput, .stButton, .stDataFrame, .stTable {{
+            background-color: rgba(255, 255, 255, 0.8); 
+            padding: 6px 10px;
+            border-radius: 6px;
+        }}
+        </style>
+    """, unsafe_allow_html=True)
+
 # ------------------- BMI + HEALTH ADVICE -------------------
 def get_bmi_category(bmi):
     if bmi < 18.5:
@@ -142,6 +155,9 @@ def app_page():
     if bg_image:
         set_background(bg_image)
 
+    # Apply text background
+    apply_text_background()
+
     # Weight + Height
     unit = st.radio("Select Weight Unit", ["Kilograms", "Pounds"])
     weight = st.number_input(f"Enter weight ({unit})", step=0.1)
@@ -160,7 +176,7 @@ def app_page():
         category, emoji, style, diet_tips, workout_tips = get_bmi_category(bmi)
 
         st.markdown(
-            f'<div class="result-card" style="{style}">{emoji} BMI: {bmi:.1f} ({category})</div>',
+            f'<div style="{style}; padding:10px; border-radius:6px;">{emoji} BMI: {bmi:.1f} ({category})</div>',
             unsafe_allow_html=True
         )
 

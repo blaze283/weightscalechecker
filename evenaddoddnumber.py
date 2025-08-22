@@ -2,9 +2,11 @@ import streamlit as st
 import base64
 import sqlite3
 import mimetypes
+import datetime
+import pandas as pd
 
 # ------------------- CONFIG -------------------
-st.set_page_config(page_title="BMI & Diet App", layout="centered")
+st.set_page_config(page_title="BMI, Diet & Workout App", layout="centered")
 
 # ------------------- DATABASE -------------------
 def init_db():
@@ -15,6 +17,14 @@ def init_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             username TEXT UNIQUE,
             password TEXT
+        )
+    """)
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS progress (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT,
+            date TEXT,
+            weight REAL
         )
     """)
     conn.commit()
@@ -39,6 +49,21 @@ def get_user(username, password):
     conn.close()
     return user
 
+def add_progress(username, date, weight):
+    conn = sqlite3.connect("users.db")
+    cur = conn.cursor()
+    cur.execute("INSERT INTO progress (username, date, weight) VALUES (?, ?, ?)", (username, date, weight))
+    conn.commit()
+    conn.close()
+
+def get_progress(username):
+    conn = sqlite3.connect("users.db")
+    cur = conn.cursor()
+    cur.execute("SELECT date, weight FROM progress WHERE username=? ORDER BY date", (username,))
+    rows = cur.fetchall()
+    conn.close()
+    return rows
+
 # ------------------- BACKGROUND -------------------
 def set_background(uploaded_file):
     mime_type, _ = mimetypes.guess_type(uploaded_file.name)
@@ -53,16 +78,32 @@ def set_background(uploaded_file):
     """
     st.markdown(page_bg, unsafe_allow_html=True)
 
-# ------------------- BMI + DIET -------------------
+# ------------------- BMI + HEALTH ADVICE -------------------
 def get_bmi_category(bmi):
     if bmi < 18.5:
-        return "Underweight", "🟦", "background-color:#d0e7ff;", "🥦 Focus on vegetables and fiber-rich foods.\n" "🍎 Limit sugary snacks and fried foods.\n" "🥩 Choose lean proteins (fish, turkey, beans).\n" "🚶 Add more walking or light cardio daily." )
+        return (
+            "Underweight", "🟦", "background-color:#d0e7ff;",
+            "🍽️ Eat calorie-dense foods.\n🥛 Drink milk/protein shakes.\n🍗 Add lean meats & eggs.\n🥑 Include avocados & nuts.",
+            "🏋️ Strength training.\n🚶 Light walks.\n🤸 Yoga.\n🛑 Avoid excess cardio."
+        )
     elif bmi < 25:
-        return "Normal weight", "🟩", "background-color:#d6f5d6;", "🥗 Balanced diet with fruits, veggies, protein. Keep active."
+        return (
+            "Normal weight", "🟩", "background-color:#d6f5d6;",
+            "🥗 Balanced diet.\n🍗 Steady protein intake.\n💧 Drink water.\n🏃‍♂️ Daily exercise.",
+            "🏃 Jog/cycle.\n🏋️ Mix cardio + strength.\n🧘 Stretch or yoga.\n⚽ Play sports."
+        )
     elif bmi < 30:
-        return "Overweight", "🟨", "background-color:#fff5cc;", "🥦 Low-calorie, high-fiber foods. Cut sugar and carbs."
+        return (
+            "Overweight", "🟨", "background-color:#fff5cc;",
+            "🥦 High-fiber diet.\n🍵 Replace soda with water/tea.\n🍞 Whole grains.\n🚶 Walk daily.",
+            "🚶 Walk 30–60 min.\n🚴 Cycle/swim.\n🏋️ Light weights.\n🤸 Stretching."
+        )
     else:
-        return "Obese", "🟥", "background-color:#ffd6cc;", "🥬 Focus on veggies, lean protein, whole grains. Consult a doctor."
+        return (
+            "Obese", "🟥", "background-color:#ffd6cc;",
+            "🥬 Eat veggies & lean protein.\n🍭 Avoid sugary drinks.\n🚴 Be active most days.\n📉 Gradual weight loss.",
+            "🚶 Start short walks.\n🧘 Gentle yoga.\n🏊 Swimming.\n🚴 Stationary cycling."
+        )
 
 # ------------------- PAGES -------------------
 def signup_page():
@@ -101,39 +142,71 @@ def app_page():
     if bg_image:
         set_background(bg_image)
 
-    # Weight input
+    # Weight + Height
     unit = st.radio("Select Weight Unit", ["Kilograms", "Pounds"])
     weight = st.number_input(f"Enter weight ({unit})", step=0.1)
 
-    # Height input in Feet & Inches
     st.markdown("📏 Enter Your Height")
     col1, col2 = st.columns(2)
     with col1:
         feet = st.number_input("Feet", min_value=1, max_value=8, step=1, value=5)
     with col2:
         inches = st.number_input("Inches", min_value=0, max_value=11, step=1, value=7)
-
-    # Convert height to meters
     height_m = (feet * 12 + inches) * 0.0254
 
-    # BMI Calculation
     if height_m > 0 and weight > 0:
         weight_kg = weight if unit == "Kilograms" else weight * 0.453592
         bmi = weight_kg / (height_m ** 2)
-        category, emoji, style, diet_plan = get_bmi_category(bmi)
+        category, emoji, style, diet_tips, workout_tips = get_bmi_category(bmi)
 
         st.markdown(
             f'<div class="result-card" style="{style}">{emoji} BMI: {bmi:.1f} ({category})</div>',
             unsafe_allow_html=True
         )
 
-        # Show Diet Plan
-        st.markdown(f"""
-        <div class="info-card" style="text-align:left;">
-        🍽️ <b>Suggested Diet Plan:</b><br>
-        <pre style="white-space: pre-wrap; font-size:16px;">{diet_plan}</pre>
-        </div>
-        """, unsafe_allow_html=True)
+        st.markdown(f"🍽️ **Diet Tips:**\n\n{diet_tips}")
+        st.markdown(f"🏋️ **Workout Tips:**\n\n{workout_tips}")
+
+    # Progress Tracker
+    st.subheader("📈 Progress Tracker")
+    prog_col1, prog_col2 = st.columns(2)
+    with prog_col1:
+        prog_date = st.date_input("Date", datetime.date.today())
+    with prog_col2:
+        prog_weight = st.number_input("Weight (kg)", step=0.1)
+
+    if st.button("Add Progress"):
+        if prog_weight > 0:
+            add_progress(st.session_state.user, str(prog_date), prog_weight)
+            st.success("✅ Progress saved!")
+
+    progress = get_progress(st.session_state.user)
+    if progress:
+        df = pd.DataFrame(progress, columns=["Date", "Weight"])
+        df["Date"] = pd.to_datetime(df["Date"])
+
+        # Filtering
+        st.markdown("🔍 **Filter Progress by Month/Year**")
+        years = df["Date"].dt.year.unique()
+        months = list(range(1, 13))
+
+        col1, col2 = st.columns(2)
+        with col1:
+            year_filter = st.selectbox("Select Year", options=["All"] + list(years))
+        with col2:
+            month_filter = st.selectbox("Select Month", options=["All"] + months)
+
+        filtered_df = df.copy()
+        if year_filter != "All":
+            filtered_df = filtered_df[filtered_df["Date"].dt.year == year_filter]
+        if month_filter != "All":
+            filtered_df = filtered_df[filtered_df["Date"].dt.month == month_filter]
+
+        st.write("📊 Progress History")
+        st.table(filtered_df)
+
+        if not filtered_df.empty:
+            st.line_chart(filtered_df.set_index("Date")["Weight"])
 
     if st.button("Logout"):
         st.session_state.clear()
@@ -154,4 +227,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

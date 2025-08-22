@@ -52,7 +52,7 @@ def inject_custom_css():
         margin: 20px 0;
         text-align: center;
     }
-    /* Style all number inputs */
+    /* Style number inputs */
     .stNumberInput > div > div > input {
         background: rgba(255,255,255,0.9);
         border-radius: 8px;
@@ -90,15 +90,44 @@ def apply_background(bg_image):
 def kg_to_lbs(kg): return kg * 2.20462
 def lbs_to_kg(lbs): return lbs * 0.453592
 
+# ------------------- BMI CATEGORY + DIET -------------------
 def get_bmi_category(bmi):
     if bmi < 18.5:
-        return "Underweight", "🔵", "background-color: rgba(0, 123, 255, 0.2);"  # Blue
+        return (
+            "Underweight", "🔵",
+            "background-color: rgba(0, 123, 255, 0.8); color: white;",
+            "🍚 Eat more calorie-dense foods like rice, pasta, and potatoes.\n"
+            "🥜 Add healthy fats (avocados, nuts, olive oil).\n"
+            "🥩 Increase protein intake (chicken, fish, eggs).\n"
+            "🥛 Drink whole milk or protein shakes."
+        )
     elif 18.5 <= bmi < 25:
-        return "Normal weight", "🟢", "background-color: rgba(40, 167, 69, 0.2);"  # Green
+        return (
+            "Normal weight", "🟢",
+            "background-color: rgba(40, 167, 69, 0.8); color: white;",
+            "🥗 Keep a balanced diet with veggies, fruits, lean proteins, and whole grains.\n"
+            "💧 Stay hydrated.\n"
+            "🏃 Maintain regular exercise to stay fit."
+        )
     elif 25 <= bmi < 30:
-        return "Overweight", "🟡", "background-color: rgba(255, 193, 7, 0.2);"  # Yellow
+        return (
+            "Overweight", "🟡",
+            "background-color: rgba(255, 193, 7, 0.8); color: white;",
+            "🥦 Focus on vegetables and fiber-rich foods.\n"
+            "🍎 Limit sugary snacks and fried foods.\n"
+            "🥩 Choose lean proteins (fish, turkey, beans).\n"
+            "🚶 Add more walking or light cardio daily."
+        )
     else:
-        return "Obese", "🔴", "background-color: rgba(220, 53, 69, 0.2);"  # Red
+        return (
+            "Obese", "🔴",
+            "background-color: rgba(220, 53, 69, 0.8); color: white;",
+            "🥦 Stick to a calorie-controlled diet.\n"
+            "🍗 Eat lean proteins and fiber-rich meals.\n"
+            "🚫 Avoid processed and fast foods.\n"
+            "🏃 Gradually increase exercise (start with walking, then cardio).\n"
+            "💧 Drink water instead of soda/juice."
+        )
 
 # ------------------- MAIN APP -------------------
 def main():
@@ -153,8 +182,17 @@ def main():
         if height > 0:
             weight_kg = weight if "Kilograms" in unit else converted_weight
             bmi = weight_kg / (height ** 2)
-            category, emoji, style = get_bmi_category(bmi)
+            category, emoji, style, diet_plan = get_bmi_category(bmi)
+
             st.markdown(f'<div class="result-card" style="{style}">{emoji} BMI: {bmi:.1f} ({category})</div>', unsafe_allow_html=True)
+
+            # Show Diet Plan
+            st.markdown(f"""
+            <div class="info-card" style="text-align:left;">
+            🍽️ <b>Suggested Diet Plan:</b><br>
+            <pre style="white-space: pre-wrap; font-size:16px;">{diet_plan}</pre>
+            </div>
+            """, unsafe_allow_html=True)
 
     else:
         st.markdown('<div class="info-card">👆 Enter your weight above to see conversions!</div>', unsafe_allow_html=True)

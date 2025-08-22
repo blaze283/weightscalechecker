@@ -14,58 +14,27 @@ st.set_page_config(
 def inject_custom_css():
     st.markdown("""
     <style>
-    * {
-        font-family: 'Segoe UI', sans-serif;
-    }
-    .main-container {
-        max-width: 800px;
-        margin: 0 auto;
-        padding: 20px;
-    }
+    * { font-family: 'Segoe UI', sans-serif; }
+    .main-container { max-width: 800px; margin: 0 auto; padding: 20px; }
     .metric-card, .result-card, .info-card, .title-header {
         background: rgba(255,255,255,0.85);
-        padding: 20px;
-        border-radius: 12px;
-        box-shadow: 0 4px 15px rgba(0,0,0,0.1);
-        color: black;
+        padding: 20px; border-radius: 12px;
+        box-shadow: 0 4px 15px rgba(0,0,0,0.1); color: black;
     }
-    .metric-card {
-        text-align: center;
-        font-weight: bold;
-    }
-    .result-card {
-        text-align: center;
-        font-size: 18px;
-        margin: 15px 0;
-    }
-    .title-header {
-        font-size: 2.2rem;
-        text-align: center;
-        font-weight: bold;
-        margin-bottom: 30px;
-    }
+    .metric-card { text-align: center; font-weight: bold; }
+    .result-card { text-align: center; font-size: 18px; margin: 15px 0; }
+    .title-header { font-size: 2.2rem; text-align: center; font-weight: bold; margin-bottom: 30px; }
     .upload-section {
-        background: rgba(255,255,255,0.85);
-        padding: 20px;
-        border-radius: 12px;
-        border: 2px dashed #dee2e6;
-        margin: 20px 0;
-        text-align: center;
+        background: rgba(255,255,255,0.85); padding: 20px; border-radius: 12px;
+        border: 2px dashed #dee2e6; margin: 20px 0; text-align: center;
     }
-    /* Style number inputs */
     .stNumberInput > div > div > input {
-        background: rgba(255,255,255,0.9);
-        border-radius: 8px;
-        border: 2px solid #ccc;
-        font-size: 18px !important;
-        text-align: center;
+        background: rgba(255,255,255,0.9); border-radius: 8px; border: 2px solid #ccc;
+        font-size: 18px !important; text-align: center;
     }
     .stSelectbox > div > div {
-        background: rgba(255,255,255,0.9);
-        border-radius: 8px;
-        border: 2px solid #ccc;
-        font-size: 18px !important;
-        text-align: center;
+        background: rgba(255,255,255,0.9); border-radius: 8px; border: 2px solid #ccc;
+        font-size: 18px !important; text-align: center;
     }
     </style>
     """, unsafe_allow_html=True)
@@ -74,7 +43,7 @@ def inject_custom_css():
 def apply_background(bg_image):
     if bg_image is not None:
         mime_type, _ = mimetypes.guess_type(bg_image.name)
-        encoded_image = base64.b64encode(bg_image.read()).decode()
+        encoded_image = base64.b64encode(bg_image.getvalue()).decode()  # safer than .read()
         st.markdown(f"""
         <style>
         .stApp {{
@@ -130,24 +99,28 @@ def get_bmi_category(bmi):
         )
 
 # ------------------- LOGIN SYSTEM -------------------
-def login_system():
-    # Dummy users
-    users = {"admin": "1234", "user": "pass"}
-
+def ensure_auth_state():
     if "logged_in" not in st.session_state:
         st.session_state.logged_in = False
+    if "username" not in st.session_state:
         st.session_state.username = ""
+    # Persist users across reruns in this session
+    if "users" not in st.session_state:
+        st.session_state.users = {"admin": "1234", "user": "pass"}  # seed demo users
+
+def login_system():
+    ensure_auth_state()
 
     if not st.session_state.logged_in:
         st.subheader("🔐 Login / Sign Up")
-
         tab1, tab2 = st.tabs(["Login", "Sign Up"])
 
         # Login Tab
         with tab1:
-            username = st.text_input("Username")
-            password = st.text_input("Password", type="password")
+            username = st.text_input("Username", key="login_user")
+            password = st.text_input("Password", type="password", key="login_pass")
             if st.button("Login"):
+                users = st.session_state.users
                 if username in users and users[username] == password:
                     st.session_state.logged_in = True
                     st.session_state.username = username
@@ -158,14 +131,22 @@ def login_system():
 
         # Sign Up Tab
         with tab2:
-            new_user = st.text_input("New Username")
-            new_pass = st.text_input("New Password", type="password")
+            new_user = st.text_input("New Username", key="signup_user")
+            new_pass = st.text_input("New Password", type="password", key="signup_pass")
             if st.button("Sign Up"):
-                if new_user in users:
+                users = st.session_state.users
+                if not new_user or not new_pass:
+                    st.warning("⚠️ Please enter a username and password.")
+                elif new_user in users:
                     st.error("⚠️ Username already exists!")
                 else:
+                    # Save to session and log in immediately
                     users[new_user] = new_pass
-                    st.success("🎉 Account created! Please login.")
+                    st.session_state.users = users
+                    st.session_state.logged_in = True
+                    st.session_state.username = new_user
+                    st.success("🎉 Account created — you’re now logged in!")
+                    st.rerun()
     else:
         st.sidebar.success(f"👋 Welcome {st.session_state.username}")
         if st.sidebar.button("Logout"):
@@ -233,7 +214,10 @@ def main():
             bmi = weight_kg / (height ** 2)
             category, emoji, style, diet_plan = get_bmi_category(bmi)
 
-            st.markdown(f'<div class="result-card" style="{style}">{emoji} BMI: {bmi:.1f} ({category})</div>', unsafe_allow_html=True)
+            st.markdown(
+                f'<div class="result-card" style="{style}">{emoji} BMI: {bmi:.1f} ({category})</div>',
+                unsafe_allow_html=True
+            )
 
             # Show Diet Plan
             st.markdown(f"""
@@ -242,7 +226,6 @@ def main():
             <pre style="white-space: pre-wrap; font-size:16px;">{diet_plan}</pre>
             </div>
             """, unsafe_allow_html=True)
-
     else:
         st.markdown('<div class="info-card">👆 Enter your weight above to see conversions!</div>', unsafe_allow_html=True)
 

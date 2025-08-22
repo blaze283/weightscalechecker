@@ -1,236 +1,156 @@
 import streamlit as st
 import base64
+import sqlite3
 import mimetypes
 
-# ------------------- PAGE CONFIG -------------------
-st.set_page_config(
-    page_title="Weight Converter",
-    page_icon="⚖️",
-    layout="centered",
-    initial_sidebar_state="collapsed"
-)
+# ------------------- CONFIG -------------------
+st.set_page_config(page_title="BMI & Diet App", layout="centered")
 
-# ------------------- CUSTOM CSS -------------------
-def inject_custom_css():
-    st.markdown("""
-    <style>
-    * { font-family: 'Segoe UI', sans-serif; }
-    .main-container { max-width: 800px; margin: 0 auto; padding: 20px; }
-    .metric-card, .result-card, .info-card, .title-header {
-        background: rgba(255,255,255,0.85);
-        padding: 20px; border-radius: 12px;
-        box-shadow: 0 4px 15px rgba(0,0,0,0.1); color: black;
-    }
-    .metric-card { text-align: center; font-weight: bold; }
-    .result-card { text-align: center; font-size: 18px; margin: 15px 0; }
-    .title-header { font-size: 2.2rem; text-align: center; font-weight: bold; margin-bottom: 30px; }
-    .upload-section {
-        background: rgba(255,255,255,0.85); padding: 20px; border-radius: 12px;
-        border: 2px dashed #dee2e6; margin: 20px 0; text-align: center;
-    }
-    .stNumberInput > div > div > input {
-        background: rgba(255,255,255,0.9); border-radius: 8px; border: 2px solid #ccc;
-        font-size: 18px !important; text-align: center;
-    }
-    .stSelectbox > div > div {
-        background: rgba(255,255,255,0.9); border-radius: 8px; border: 2px solid #ccc;
-        font-size: 18px !important; text-align: center;
-    }
-    </style>
-    """, unsafe_allow_html=True)
+# ------------------- DATABASE -------------------
+def init_db():
+    conn = sqlite3.connect("users.db")
+    cur = conn.cursor()
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT UNIQUE,
+            password TEXT
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+def add_user(username, password):
+    try:
+        conn = sqlite3.connect("users.db")
+        cur = conn.cursor()
+        cur.execute("INSERT INTO users (username, password) VALUES (?, ?)", (username, password))
+        conn.commit()
+        conn.close()
+        return True
+    except:
+        return False
+
+def get_user(username, password):
+    conn = sqlite3.connect("users.db")
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM users WHERE username=? AND password=?", (username, password))
+    user = cur.fetchone()
+    conn.close()
+    return user
 
 # ------------------- BACKGROUND -------------------
-def apply_background(bg_image):
-    if bg_image is not None:
-        mime_type, _ = mimetypes.guess_type(bg_image.name)
-        encoded_image = base64.b64encode(bg_image.getvalue()).decode()  # safer than .read()
-        st.markdown(f"""
-        <style>
-        .stApp {{
-            background-image: url("data:{mime_type};base64,{encoded_image}");
-            background-size: cover;
-            background-position: center;
-            background-attachment: fixed;
-        }}
-        </style>
-        """, unsafe_allow_html=True)
+def set_background(uploaded_file):
+    mime_type, _ = mimetypes.guess_type(uploaded_file.name)
+    encoded = base64.b64encode(uploaded_file.getvalue()).decode()
+    page_bg = f"""
+    <style>
+    .stApp {{
+        background-image: url("data:{mime_type};base64,{encoded}");
+        background-size: cover;
+    }}
+    </style>
+    """
+    st.markdown(page_bg, unsafe_allow_html=True)
 
-# ------------------- CONVERSIONS -------------------
-def kg_to_lbs(kg): return kg * 2.20462
-def lbs_to_kg(lbs): return lbs * 0.453592
-
-# ------------------- BMI CATEGORY + DIET -------------------
+# ------------------- BMI + DIET -------------------
 def get_bmi_category(bmi):
     if bmi < 18.5:
-        return (
-            "Underweight", "🔵",
-            "background-color: rgba(0, 123, 255, 0.8); color: white;",
-            "🍚 Eat more calorie-dense foods like rice, pasta, and potatoes.\n"
-            "🥜 Add healthy fats (avocados, nuts, olive oil).\n"
-            "🥩 Increase protein intake (chicken, fish, eggs).\n"
-            "🥛 Drink whole milk or protein shakes."
-        )
-    elif 18.5 <= bmi < 25:
-        return (
-            "Normal weight", "🟢",
-            "background-color: rgba(40, 167, 69, 0.8); color: white;",
-            "🥗 Keep a balanced diet with veggies, fruits, lean proteins, and whole grains.\n"
-            "💧 Stay hydrated.\n"
-            "🏃 Maintain regular exercise to stay fit."
-        )
-    elif 25 <= bmi < 30:
-        return (
-            "Overweight", "🟡",
-            "background-color: rgba(255, 193, 7, 0.8); color: white;",
-            "🥦 Focus on vegetables and fiber-rich foods.\n"
-            "🍎 Limit sugary snacks and fried foods.\n"
-            "🥩 Choose lean proteins (fish, turkey, beans).\n"
-            "🚶 Add more walking or light cardio daily."
-        )
+        return "Underweight", "🟦", "background-color:#d0e7ff;", "🍽️ Eat high-calorie nutritious foods. Add protein shakes and 5–6 meals/day."
+    elif bmi < 25:
+        return "Normal weight", "🟩", "background-color:#d6f5d6;", "🥗 Balanced diet with fruits, veggies, protein. Keep active."
+    elif bmi < 30:
+        return "Overweight", "🟨", "background-color:#fff5cc;", "🥦 Low-calorie, high-fiber foods. Cut sugar and carbs."
     else:
-        return (
-            "Obese", "🔴",
-            "background-color: rgba(220, 53, 69, 0.8); color: white;",
-            "🥦 Stick to a calorie-controlled diet.\n"
-            "🍗 Eat lean proteins and fiber-rich meals.\n"
-            "🚫 Avoid processed and fast foods.\n"
-            "🏃 Gradually increase exercise (start with walking, then cardio).\n"
-            "💧 Drink water instead of soda/juice."
-        )
+        return "Obese", "🟥", "background-color:#ffd6cc;", "🥬 Focus on veggies, lean protein, whole grains. Consult a doctor."
 
-# ------------------- LOGIN SYSTEM -------------------
-def ensure_auth_state():
-    if "logged_in" not in st.session_state:
-        st.session_state.logged_in = False
-    if "username" not in st.session_state:
-        st.session_state.username = ""
-    # Persist users across reruns in this session
-    if "users" not in st.session_state:
-        st.session_state.users = {"admin": "1234", "user": "pass"}  # seed demo users
+# ------------------- PAGES -------------------
+def signup_page():
+    st.subheader("Sign Up")
+    username = st.text_input("Username")
+    password = st.text_input("Password", type="password")
+    if st.button("Sign Up"):
+        if username and password:
+            if add_user(username, password):
+                st.success("✅ Account created! Please login.")
+                st.session_state.page = "login"
+            else:
+                st.error("⚠️ Username already exists.")
+        else:
+            st.warning("⚠️ Enter both fields.")
 
-def login_system():
-    ensure_auth_state()
+def login_page():
+    st.subheader("Login")
+    username = st.text_input("Username")
+    password = st.text_input("Password", type="password")
+    if st.button("Login"):
+        user = get_user(username, password)
+        if user:
+            st.session_state.user = username
+            st.session_state.page = "app"
+        else:
+            st.error("❌ Invalid username or password.")
+    if st.button("Go to Sign Up"):
+        st.session_state.page = "signup"
 
-    if not st.session_state.logged_in:
-        st.subheader("🔐 Login / Sign Up")
-        tab1, tab2 = st.tabs(["Login", "Sign Up"])
+def app_page():
+    st.subheader(f"Welcome {st.session_state.user}! 🎉")
 
-        # Login Tab
-        with tab1:
-            username = st.text_input("Username", key="login_user")
-            password = st.text_input("Password", type="password", key="login_pass")
-            if st.button("Login"):
-                users = st.session_state.users
-                if username in users and users[username] == password:
-                    st.session_state.logged_in = True
-                    st.session_state.username = username
-                    st.success(f"✅ Welcome {username}!")
-                    st.rerun()
-                else:
-                    st.error("❌ Invalid credentials")
+    # Background upload
+    bg_image = st.file_uploader("Upload a background", type=["png", "jpg", "jpeg"])
+    if bg_image:
+        set_background(bg_image)
 
-        # Sign Up Tab
-        with tab2:
-            new_user = st.text_input("New Username", key="signup_user")
-            new_pass = st.text_input("New Password", type="password", key="signup_pass")
-            if st.button("Sign Up"):
-                users = st.session_state.users
-                if not new_user or not new_pass:
-                    st.warning("⚠️ Please enter a username and password.")
-                elif new_user in users:
-                    st.error("⚠️ Username already exists!")
-                else:
-                    # Save to session and log in immediately
-                    users[new_user] = new_pass
-                    st.session_state.users = users
-                    st.session_state.logged_in = True
-                    st.session_state.username = new_user
-                    st.success("🎉 Account created — you’re now logged in!")
-                    st.rerun()
-    else:
-        st.sidebar.success(f"👋 Welcome {st.session_state.username}")
-        if st.sidebar.button("Logout"):
-            st.session_state.logged_in = False
-            st.session_state.username = ""
-            st.rerun()
-        return True
-    return False
+    # Weight input
+    unit = st.radio("Select Weight Unit", ["Kilograms", "Pounds"])
+    weight = st.number_input(f"Enter weight ({unit})", step=0.1)
 
-# ------------------- MAIN APP -------------------
-def main():
-    inject_custom_css()
-    logged_in = login_system()
-    if not logged_in:
-        return
-
-    # Title
-    st.markdown('<div class="title-header">⚖️ Weight Scale Converter ⚖️</div>', unsafe_allow_html=True)
-
-    # Background uploader
-    bg_image = st.file_uploader("Upload background image", type=["jpg", "jpeg", "png"])
-    apply_background(bg_image)
-
-    # Inputs
+    # Height input in Feet & Inches
+    st.markdown("📏 Enter Your Height")
     col1, col2 = st.columns(2)
     with col1:
-        st.markdown('<div class="info-card">📏 Select Unit</div>', unsafe_allow_html=True)
-        unit = st.selectbox("", ["Kilograms (kg)", "Pounds (lbs)"], key="unit")
-
+        feet = st.number_input("Feet", min_value=1, max_value=8, step=1, value=5)
     with col2:
-        st.markdown('<div class="info-card">🔢 Enter Weight</div>', unsafe_allow_html=True)
-        weight = st.number_input("", min_value=0.1, max_value=999.9, step=0.1, format="%.1f")
+        inches = st.number_input("Inches", min_value=0, max_value=11, step=1, value=7)
 
-    # Results
-    if weight > 0:
-        if "Kilograms" in unit:
-            converted_weight = kg_to_lbs(weight)
-            stones = converted_weight / 14
-            ounces = converted_weight * 16
-            grams = weight * 1000
-        else:
-            converted_weight = lbs_to_kg(weight)
-            stones = weight / 14
-            ounces = weight * 16
-            grams = converted_weight * 1000
+    # Convert height to meters
+    height_m = (feet * 12 + inches) * 0.0254
 
-        st.markdown(f'''
-        <div class="result-card">
-            🎯 Conversion Result:<br><b>{weight:.1f} {unit} = {converted_weight:.1f} {'lbs' if "Kilograms" in unit else 'kg'}</b>
+    # BMI Calculation
+    if height_m > 0 and weight > 0:
+        weight_kg = weight if unit == "Kilograms" else weight * 0.453592
+        bmi = weight_kg / (height_m ** 2)
+        category, emoji, style, diet_plan = get_bmi_category(bmi)
+
+        st.markdown(
+            f'<div class="result-card" style="{style}">{emoji} BMI: {bmi:.1f} ({category})</div>',
+            unsafe_allow_html=True
+        )
+
+        # Show Diet Plan
+        st.markdown(f"""
+        <div class="info-card" style="text-align:left;">
+        🍽️ <b>Suggested Diet Plan:</b><br>
+        <pre style="white-space: pre-wrap; font-size:16px;">{diet_plan}</pre>
         </div>
-        ''', unsafe_allow_html=True)
+        """, unsafe_allow_html=True)
 
-        col3, col4, col5 = st.columns(3)
-        col3.markdown(f'<div class="metric-card">🪨 Stones<br>{stones:.1f}</div>', unsafe_allow_html=True)
-        col4.markdown(f'<div class="metric-card">⚖️ Ounces<br>{ounces:.0f}</div>', unsafe_allow_html=True)
-        col5.markdown(f'<div class="metric-card">📊 Grams<br>{grams:.0f}</div>', unsafe_allow_html=True)
+    if st.button("Logout"):
+        st.session_state.clear()
+        st.session_state.page = "login"
 
-        # BMI Calculator
-        st.markdown('<div class="info-card">🧮 Quick BMI Calculator</div>', unsafe_allow_html=True)
-        st.markdown('<div class="info-card">📏 Enter Your Height (m)</div>', unsafe_allow_html=True)
-        height = st.number_input("", min_value=0.5, max_value=3.0, step=0.01, value=1.70)
+# ------------------- MAIN -------------------
+def main():
+    init_db()
+    if "page" not in st.session_state:
+        st.session_state.page = "login"
 
-        if height > 0:
-            weight_kg = weight if "Kilograms" in unit else converted_weight
-            bmi = weight_kg / (height ** 2)
-            category, emoji, style, diet_plan = get_bmi_category(bmi)
-
-            st.markdown(
-                f'<div class="result-card" style="{style}">{emoji} BMI: {bmi:.1f} ({category})</div>',
-                unsafe_allow_html=True
-            )
-
-            # Show Diet Plan
-            st.markdown(f"""
-            <div class="info-card" style="text-align:left;">
-            🍽️ <b>Suggested Diet Plan:</b><br>
-            <pre style="white-space: pre-wrap; font-size:16px;">{diet_plan}</pre>
-            </div>
-            """, unsafe_allow_html=True)
-    else:
-        st.markdown('<div class="info-card">👆 Enter your weight above to see conversions!</div>', unsafe_allow_html=True)
-
-    # Footer
-    st.markdown('<div class="info-card" style="text-align:center;">💪 Stay healthy and keep tracking! 💪<br><small>Made with ❤️ using Streamlit</small></div>', unsafe_allow_html=True)
+    if st.session_state.page == "signup":
+        signup_page()
+    elif st.session_state.page == "login":
+        login_page()
+    elif st.session_state.page == "app":
+        app_page()
 
 if __name__ == "__main__":
     main()

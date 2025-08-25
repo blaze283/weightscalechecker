@@ -96,42 +96,86 @@ def get_bmi_category(bmi):
 📅 Build gradually & stay consistent."""
         )
 
-# ---------------- WEIGHT INPUT ----------------
-st.markdown('<div class="info-card">⚖️ Enter Your Weight</div>', unsafe_allow_html=True)
-unit = st.selectbox("Select Unit", ["Kilograms", "Pounds"])
-weight = st.number_input(f"Enter Your Weight ({unit})", min_value=1.0, step=0.5)
+# ---------------- USER AUTH ----------------
+if "users" not in st.session_state:
+    st.session_state.users = {}  # store {username: password}
+if "logged_in" not in st.session_state:
+    st.session_state.logged_in = False
+if "username" not in st.session_state:
+    st.session_state.username = ""
 
-# ---------------- HEIGHT INPUT ----------------
-st.markdown('<div class="info-card">📏 Enter Your Height</div>', unsafe_allow_html=True)
-col1, col2 = st.columns(2)
-with col1:
-    feet = st.number_input("Feet", min_value=1, max_value=8, step=1, value=5)
-with col2:
-    inches = st.number_input("Inches", min_value=0, max_value=11, step=1, value=7)
+def login_page():
+    st.markdown('<div class="info-card">🔑 Login</div>', unsafe_allow_html=True)
+    username = st.text_input("Username")
+    password = st.text_input("Password", type="password")
+    if st.button("Login"):
+        if username in st.session_state.users and st.session_state.users[username] == password:
+            st.session_state.logged_in = True
+            st.session_state.username = username
+            st.success(f"✅ Welcome back, {username}!")
+        else:
+            st.error("❌ Invalid username or password")
 
-# Convert feet+inches → meters
-height_m = (feet * 12 + inches) * 0.0254
+def signup_page():
+    st.markdown('<div class="info-card">📝 Sign Up</div>', unsafe_allow_html=True)
+    new_user = st.text_input("Choose a Username")
+    new_pass = st.text_input("Choose a Password", type="password")
+    if st.button("Sign Up"):
+        if new_user in st.session_state.users:
+            st.error("⚠️ Username already exists")
+        else:
+            st.session_state.users[new_user] = new_pass
+            st.success("✅ Account created! You can now log in.")
 
-# ---------------- BMI CALCULATION ----------------
-if height_m > 0 and weight > 0:
-    weight_kg = weight if unit == "Kilograms" else weight * 0.453592
-    bmi = weight_kg / (height_m ** 2)
-    category, emoji, style, diet_tips, workout_tips = get_bmi_category(bmi)
+# ---------------- MAIN APP ----------------
+if not st.session_state.logged_in:
+    choice = st.radio("Select an option:", ["Login", "Sign Up"])
+    if choice == "Login":
+        login_page()
+    else:
+        signup_page()
+else:
+    st.markdown(f'<div class="info-card">👋 Welcome, {st.session_state.username}!</div>', unsafe_allow_html=True)
 
-    st.markdown(f'<div class="result-card" style="{style}">{emoji} BMI: {bmi:.1f} ({category})</div>', unsafe_allow_html=True)
+    # Weight Input
+    st.markdown('<div class="info-card">⚖️ Enter Your Weight</div>', unsafe_allow_html=True)
+    unit = st.selectbox("Select Unit", ["Kilograms", "Pounds"])
+    weight = st.number_input(f"Enter Your Weight ({unit})", min_value=1.0, step=0.5)
 
-    # Diet Tips
-    st.markdown(f"""
-    <div class="info-card" style="text-align:left;">
-    🍽️ <b>Diet Tips:</b><br>
-    <pre style="white-space: pre-wrap; font-size:16px;">{diet_tips}</pre>
-    </div>
-    """, unsafe_allow_html=True)
+    # Height Input
+    st.markdown('<div class="info-card">📏 Enter Your Height</div>', unsafe_allow_html=True)
+    col1, col2 = st.columns(2)
+    with col1:
+        feet = st.number_input("Feet", min_value=1, max_value=8, step=1, value=5)
+    with col2:
+        inches = st.number_input("Inches", min_value=0, max_value=11, step=1, value=7)
 
-    # Workout Tips
-    st.markdown(f"""
-    <div class="info-card" style="text-align:left;">
-    🏋️ <b>Workout Tips:</b><br>
-    <pre style="white-space: pre-wrap; font-size:16px;">{workout_tips}</pre>
-    </div>
-    """, unsafe_allow_html=True)
+    # Calculate BMI
+    height_m = (feet * 12 + inches) * 0.0254
+    if height_m > 0 and weight > 0:
+        weight_kg = weight if unit == "Kilograms" else weight * 0.453592
+        bmi = weight_kg / (height_m ** 2)
+        category, emoji, style, diet_tips, workout_tips = get_bmi_category(bmi)
+
+        st.markdown(f'<div class="result-card" style="{style}">{emoji} BMI: {bmi:.1f} ({category})</div>', unsafe_allow_html=True)
+
+        # Diet Tips
+        st.markdown(f"""
+        <div class="info-card" style="text-align:left;">
+        🍽️ <b>Diet Tips:</b><br>
+        <pre style="white-space: pre-wrap; font-size:16px;">{diet_tips}</pre>
+        </div>
+        """, unsafe_allow_html=True)
+
+        # Workout Tips
+        st.markdown(f"""
+        <div class="info-card" style="text-align:left;">
+        🏋️ <b>Workout Tips:</b><br>
+        <pre style="white-space: pre-wrap; font-size:16px;">{workout_tips}</pre>
+        </div>
+        """, unsafe_allow_html=True)
+
+    # Logout Button
+    if st.button("🚪 Logout"):
+        st.session_state.logged_in = False
+        st.session_state.username = ""

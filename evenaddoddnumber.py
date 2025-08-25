@@ -1,42 +1,55 @@
 import streamlit as st
 import base64
 
-# ---------------- PAGE CONFIG ----------------
-st.set_page_config(page_title="BMI & Fitness App", page_icon="💪", layout="centered")
+# ---------------- SESSION STATE ----------------
+if "logged_in" not in st.session_state:
+    st.session_state.logged_in = False
+if "username" not in st.session_state:
+    st.session_state.username = None
+if "users" not in st.session_state:
+    st.session_state.users = {"test": "1234"}  # demo user
 
-# ---------------- USER DATA ----------------
-users = {"admin": "1234"}  # default user
+# ---------------- THEMES ----------------
+def apply_theme(mode="light", bg_color=None, bg_image=None):
+    if mode == "dark":
+        text_color = "#FFFFFF"
+        input_bg = "#333333"
+        input_text = "#FFFFFF"
+        button_bg = "#555555"
+        button_text = "#FFFFFF"
+        default_bg = "#121212"
+    else:
+        text_color = "#000000"
+        input_bg = "#FFFFFF"
+        input_text = "#000000"
+        button_bg = "#e0e0e0"
+        button_text = "#000000"
+        default_bg = "#f0f2f6"
 
-# ---------------- BACKGROUND ----------------
-def set_background(color=None, image=None, dark_mode=False):
-    text_color = "white" if dark_mode else "black"
-    if image is not None:
+    if bg_image:
         st.markdown(
             f"""
             <style>
             .stApp {{
-                background: url("data:image/png;base64,{image}") no-repeat center center fixed;
+                background: url("data:image/png;base64,{bg_image}") no-repeat center center fixed;
                 background-size: cover;
                 color: {text_color};
             }}
-            </style>
-            """,
-            unsafe_allow_html=True
-        )
-    elif color:
-        st.markdown(
-            f"""
-            <style>
-            .stApp {{
-                background-color: {color};
-                color: {text_color};
+            input, textarea {{
+                background-color: {input_bg} !important;
+                color: {input_text} !important;
+            }}
+            .stButton>button {{
+                background-color: {button_bg};
+                color: {button_text};
+                border-radius: 8px;
+                padding: 0.4em 1em;
             }}
             </style>
-            """,
-            unsafe_allow_html=True
+            """, unsafe_allow_html=True
         )
     else:
-        bg_color = "#111111" if dark_mode else "#f0f2f6"
+        bg_color = bg_color or default_bg
         st.markdown(
             f"""
             <style>
@@ -44,136 +57,94 @@ def set_background(color=None, image=None, dark_mode=False):
                 background-color: {bg_color};
                 color: {text_color};
             }}
+            input, textarea {{
+                background-color: {input_bg} !important;
+                color: {input_text} !important;
+            }}
+            .stButton>button {{
+                background-color: {button_bg};
+                color: {button_text};
+                border-radius: 8px;
+                padding: 0.4em 1em;
+            }}
             </style>
-            """,
-            unsafe_allow_html=True
+            """, unsafe_allow_html=True
         )
 
-# ---------------- BMI CATEGORIES ----------------
+# ---------------- BMI CATEGORY ----------------
 def get_bmi_category(bmi):
     if bmi < 18.5:
-        return "Underweight", "🟦", "background-color:#d0e7ff;"
-    elif bmi < 25:
-        return "Normal weight", "🟩", "background-color:#d6f5d6;"
-    elif bmi < 30:
-        return "Overweight", "🟨", "background-color:#fff5cc;"
+        return ("Underweight", "⚠️", "background-color:#FFDDC1; color:#000;",
+                "🍠 Eat more carbs, proteins, healthy fats.\n🥛 Drink milkshakes & smoothies.\n🥩 Try peanut butter, avocados, fish.",
+                "🏋️ Strength training\n🚶 Brisk walks\n🧘 Light yoga")
+    elif 18.5 <= bmi < 24.9:
+        return ("Normal", "✅", "background-color:#C1FFD7; color:#000;",
+                "🥗 Balanced meals with veggies, proteins, carbs.\n💧 Stay hydrated.\n🍊 Snack on fruits & nuts.",
+                "🏃 Jogging / Running\n🏋️ Mix strength + cardio\n🚴 Cycling")
+    elif 25 <= bmi < 29.9:
+        return ("Overweight", "⚠️", "background-color:#FFFAC1; color:#000;",
+                "🥦 Eat fiber-rich foods.\n🥩 Cut fried foods & sugary drinks.\n🥗 Focus on portion control.",
+                "🏋️ HIIT workouts\n🏊 Swimming\n🚶 Daily walks")
     else:
-        return "Obese", "🟥", "background-color:#ffd6cc;"
+        return ("Obese", "❌", "background-color:#FFBDBD; color:#000;",
+                "🥗 Adopt a calorie-deficit diet.\n🥩 Choose lean proteins.\n🥦 Eat veggies & whole grains.\n🚫 Avoid processed foods.",
+                "🚶 Start with walking\n🏋️ Gradually add strength training\n🧘 Yoga & stretching")
 
-# ---------------- LOGIN SYSTEM ----------------
-if "logged_in" not in st.session_state:
-    st.session_state.logged_in = False
+# ---------------- BACKGROUND CUSTOMIZATION ----------------
+st.sidebar.title("🎨 Customize Background")
+theme_mode = st.sidebar.radio("Theme Mode:", ["Light", "Dark"])
+bg_choice = st.sidebar.radio("Choose Background Type:", ["Default", "Color", "Image"])
 
-# ---------------- SIDEBAR SETTINGS ----------------
-st.sidebar.title("⚙️ Settings")
-
-# Dark/Light mode
-dark_mode = st.sidebar.radio("Theme", ["Light", "Dark"]) == "Dark"
-
-# Background customization
-bg_choice = st.sidebar.radio("Background Type", ["Default", "Color", "Image"])
-
+picked_color, img_data = None, None
 if bg_choice == "Color":
-    picked_color = st.sidebar.color_picker("Pick a background color", "#f0f2f6" if not dark_mode else "#111111")
-    set_background(color=picked_color, dark_mode=dark_mode)
+    picked_color = st.sidebar.color_picker("Pick a background color", "#f0f2f6")
 elif bg_choice == "Image":
-    uploaded_img = st.sidebar.file_uploader("Upload an image", type=["png", "jpg", "jpeg"])
+    uploaded_img = st.sidebar.file_uploader("Upload an image", type=["png","jpg","jpeg"])
     if uploaded_img:
         img_data = base64.b64encode(uploaded_img.read()).decode()
-        set_background(image=img_data, dark_mode=dark_mode)
-    else:
-        set_background(dark_mode=dark_mode)
-else:
-    set_background(dark_mode=dark_mode)
 
-# ---------------- STYLES ----------------
-card_bg = "#222222aa" if dark_mode else "#ffffffaa"
-text_color = "white" if dark_mode else "black"
-input_bg = "#333333" if dark_mode else "white"
-input_text = "white" if dark_mode else "black"
+apply_theme(theme_mode.lower(), bg_color=picked_color, bg_image=img_data)
 
-st.markdown(f"""
-<style>
-/* Text colors */
-body, .stApp, .stMarkdown, .stTextInput, .stSelectbox, .stRadio, .stButton > button {{
-    color: {text_color} !important;
-}}
-
-/* Input fields styling */
-input, textarea, select {{
-    background-color: {input_bg} !important;
-    color: {input_text} !important;
-    border-radius: 8px !important;
-    border: 1px solid #888 !important;
-    padding: 6px !important;
-}}
-
-/* Buttons */
-.stButton > button {{
-    background-color: {"#444" if dark_mode else "#4CAF50"} !important;
-    color: white !important;
-    border-radius: 8px !important;
-    padding: 8px 16px !important;
-}}
-.stButton > button:hover {{
-    background-color: {"#666" if dark_mode else "#45a049"} !important;
-}}
-
-/* Info & Result Cards */
-.info-card {{
-    background-color: {card_bg};
-    color: {text_color};
-    padding: 15px;
-    border-radius: 12px;
-    margin: 10px 0;
-    box-shadow: 1px 1px 5px rgba(0,0,0,0.3);
-    text-align: center;
-    font-size: 18px;
-}}
-.result-card {{
-    padding: 15px;
-    border-radius: 12px;
-    margin: 10px 0;
-    font-size: 20px;
-    font-weight: bold;
-    text-align: center;
-    color: {text_color};
-}}
-</style>
-""", unsafe_allow_html=True)
-
-# ---------------- APP LOGIC ----------------
+# ---------------- AUTH SYSTEM ----------------
 if not st.session_state.logged_in:
-    choice = st.sidebar.radio("Account", ["Login", "Sign Up"])
+    st.title("🔐 Login / Sign Up")
+
+    choice = st.radio("Choose an option:", ["Login", "Sign Up"])
 
     if choice == "Login":
-        st.markdown('<div class="info-card">🔑 Login</div>', unsafe_allow_html=True)
         username = st.text_input("Username")
         password = st.text_input("Password", type="password")
         if st.button("Login"):
-            if username in users and users[username] == password:
+            if username in st.session_state.users and st.session_state.users[username] == password:
                 st.session_state.logged_in = True
+                st.session_state.username = username
                 st.success("Login successful ✅")
+                st.experimental_rerun()
             else:
                 st.error("Invalid username or password ❌")
 
-    else:
-        st.markdown('<div class="info-card">🆕 Sign Up</div>', unsafe_allow_html=True)
+    else:  # Sign Up
         new_user = st.text_input("Choose a Username")
         new_pass = st.text_input("Choose a Password", type="password")
         if st.button("Sign Up"):
-            if new_user in users:
+            if new_user in st.session_state.users:
                 st.error("Username already exists ❌")
             else:
-                users[new_user] = new_pass
-                st.success("Account created! Please login ✅")
+                st.session_state.users[new_user] = new_pass
+                st.success("Account created! ✅ Redirecting...")
+                st.session_state.logged_in = True
+                st.session_state.username = new_user
+                st.experimental_rerun()
 
-else:
-    st.markdown('<div class="info-card">💪 Welcome to the BMI & Fitness App</div>', unsafe_allow_html=True)
+# ---------------- MAIN APP ----------------
+if st.session_state.logged_in:
+    st.title(f"Welcome, {st.session_state.username}! 🎉")
 
-    unit = st.radio("Select Your Weight Unit:", ["Kilograms", "Pounds"])
-    weight = st.number_input(f"Enter Your Weight in {unit}:", min_value=1.0, step=0.5)
+    # Weight input
+    unit = st.selectbox("Select Your Weight Unit:", ["Kilograms", "Pounds"])
+    weight = st.number_input(f"Enter Your Weight in {unit}", step=0.1, min_value=0.0)
 
+    # Height input
     st.markdown('<div class="info-card">📏 Enter Your Height</div>', unsafe_allow_html=True)
     col1, col2 = st.columns(2)
     with col1:
@@ -182,12 +153,32 @@ else:
         inches = st.number_input("Inches", min_value=0, max_value=11, step=1, value=7)
 
     height_m = (feet * 12 + inches) * 0.0254
+
     if height_m > 0 and weight > 0:
         weight_kg = weight if unit == "Kilograms" else weight * 0.453592
         bmi = weight_kg / (height_m ** 2)
-        category, emoji, style = get_bmi_category(bmi)
+        category, emoji, style, diet_tips, workout_tips = get_bmi_category(bmi)
+
         st.markdown(f'<div class="result-card" style="{style}">{emoji} BMI: {bmi:.1f} ({category})</div>', unsafe_allow_html=True)
 
+        # Diet Tips
+        st.markdown(f"""
+        <div class="info-card" style="text-align:left;">
+        🍽️ <b>Suggested Diet Plan:</b><br>
+        <pre style="white-space: pre-wrap; font-size:16px;">{diet_tips}</pre>
+        </div>
+        """, unsafe_allow_html=True)
+
+        # Workout Tips
+        st.markdown(f"""
+        <div class="info-card" style="text-align:left;">
+        🏋️ <b>Workout Tips:</b><br>
+        <pre style="white-space: pre-wrap; font-size:16px;">{workout_tips}</pre>
+        </div>
+        """, unsafe_allow_html=True)
+
+    # Logout
     if st.button("Logout"):
         st.session_state.logged_in = False
+        st.session_state.username = None
         st.experimental_rerun()

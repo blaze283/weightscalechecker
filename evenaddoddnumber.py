@@ -4,7 +4,7 @@ import base64
 # ---------------- PAGE CONFIG ----------------
 st.set_page_config(page_title="BMI & Fitness App", page_icon="💪", layout="centered")
 
-# ---------------- USER DATA (simple in-memory store) ----------------
+# ---------------- USER DATA ----------------
 users = {"admin": "1234"}  # default user
 
 # ---------------- BACKGROUND ----------------
@@ -89,14 +89,37 @@ else:
 # ---------------- STYLES ----------------
 card_bg = "#222222aa" if dark_mode else "#ffffffaa"
 text_color = "white" if dark_mode else "black"
+input_bg = "#333333" if dark_mode else "white"
+input_text = "white" if dark_mode else "black"
 
 st.markdown(f"""
 <style>
-/* Apply text color to everything */
+/* Text colors */
 body, .stApp, .stMarkdown, .stTextInput, .stSelectbox, .stRadio, .stButton > button {{
     color: {text_color} !important;
 }}
 
+/* Input fields styling */
+input, textarea, select {{
+    background-color: {input_bg} !important;
+    color: {input_text} !important;
+    border-radius: 8px !important;
+    border: 1px solid #888 !important;
+    padding: 6px !important;
+}}
+
+/* Buttons */
+.stButton > button {{
+    background-color: {"#444" if dark_mode else "#4CAF50"} !important;
+    color: white !important;
+    border-radius: 8px !important;
+    padding: 8px 16px !important;
+}}
+.stButton > button:hover {{
+    background-color: {"#666" if dark_mode else "#45a049"} !important;
+}}
+
+/* Info & Result Cards */
 .info-card {{
     background-color: {card_bg};
     color: {text_color};

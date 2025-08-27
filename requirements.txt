@@ -1,5 +1,5 @@
 streamlit
-pandas
-numpy
-bcrypt
-matplotlib
+forex-python
+qrcode
+requests
+Pillow

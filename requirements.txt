@@ -1,5 +1,5 @@
 streamlit
 forex-python
 qrcode
-requests
 Pillow
+requests

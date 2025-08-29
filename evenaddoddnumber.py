@@ -2,7 +2,7 @@
 import streamlit as st
 import sqlite3
 import os
-import bcrypt
+from passlib.hash import bcrypt
 import pyotp
 import time
 import uuid
@@ -115,11 +115,14 @@ init_db()
 # ----------------------------
 # Helpers
 # ----------------------------
-def hash_pin(pin: str) -> bytes:
-    return bcrypt.hashpw(pin.encode(), bcrypt.gensalt())
+# Hash a PIN
+hashed_pin = bcrypt.hash("1234")
 
-def check_pin(pin: str, pin_hash: bytes) -> bool:
-    return bcrypt.checkpw(pin.encode(), pin_hash)
+# Verify a PIN
+if bcrypt.verify("1234", hashed_pin):
+    print("PIN correct")
+else:
+    print("Wrong PIN")
 
 def create_user(phone, name=None, email=None, nin=None, bvn=None, pin=None, is_admin=0):
     conn = get_conn()
@@ -596,3 +599,4 @@ elif menu == "Admin":
 # ----------------------------
 st.markdown("---")
 st.caption("Demo app — not for production. Follow security best practices before going live.")
+

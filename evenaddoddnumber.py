@@ -38,7 +38,7 @@ def get_conn():
 def init_db():
     conn = get_conn()
     c = conn.cursor()
-    # users table
+    # users table (pin_hash stored as TEXT for passlib bcrypt)
     c.execute("""
     CREATE TABLE IF NOT EXISTS users (
         id TEXT PRIMARY KEY,
@@ -47,7 +47,7 @@ def init_db():
         name TEXT,
         nin TEXT,
         bvn TEXT,
-        pin_hash BLOB,
+        pin_hash TEXT,
         totp_secret TEXT,
         is_admin INTEGER DEFAULT 0,
         created_at TEXT
@@ -115,14 +115,18 @@ init_db()
 # ----------------------------
 # Helpers
 # ----------------------------
-# Hash a PIN
-hashed_pin = bcrypt.hash("1234")
+def hash_pin(pin: str) -> str:
+    """Hash a PIN using passlib bcrypt and return string."""
+    return bcrypt.hash(pin)
 
-# Verify a PIN
-if bcrypt.verify("1234", hashed_pin):
-    print("PIN correct")
-else:
-    print("Wrong PIN")
+def check_pin(pin: str, pin_hash: str) -> bool:
+    """Verify a PIN against stored hash. Returns False if no hash provided."""
+    if not pin_hash:
+        return False
+    try:
+        return bcrypt.verify(pin, pin_hash)
+    except Exception:
+        return False
 
 def create_user(phone, name=None, email=None, nin=None, bvn=None, pin=None, is_admin=0):
     conn = get_conn()
@@ -599,4 +603,3 @@ elif menu == "Admin":
 # ----------------------------
 st.markdown("---")
 st.caption("Demo app — not for production. Follow security best practices before going live.")
-

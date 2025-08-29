@@ -1,5 +1,9 @@
 streamlit
-forex-python
+bcrypt
+pyotp
 qrcode
-Pillow
+pillow
+sqlalchemy
+databases==0.5.7     # lightweight DB helper (optional)
+python-dotenv
 requests

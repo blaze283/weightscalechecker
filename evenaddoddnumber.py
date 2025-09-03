@@ -3,11 +3,11 @@ import sqlite3
 from datetime import datetime, timedelta
 
 # ------------------- DATABASE -------------------
-conn = sqlite3.connect("users.db")
+conn = sqlite3.connect("users.db", check_same_thread=False)
 c = conn.cursor()
 c.execute("""CREATE TABLE IF NOT EXISTS users (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                username TEXT,
+                email TEXT,
                 password TEXT,
                 plan TEXT,
                 trial_end DATE
@@ -46,14 +46,14 @@ exercise_plan = {
 }
 
 # ------------------- AUTH SYSTEM -------------------
-def signup(username, password):
+def signup(email, password):
     trial_end = datetime.now() + timedelta(days=7)  # free 7-day trial
-    c.execute("INSERT INTO users (username, password, plan, trial_end) VALUES (?, ?, ?, ?)",
-              (username, password, "Free Trial", trial_end.strftime("%Y-%m-%d")))
+    c.execute("INSERT INTO users (email, password, plan, trial_end) VALUES (?, ?, ?, ?)",
+              (email, password, "Free Trial", trial_end.strftime("%Y-%m-%d")))
     conn.commit()
 
-def login(username, password):
-    c.execute("SELECT * FROM users WHERE username=? AND password=?", (username, password))
+def login(email, password):
+    c.execute("SELECT * FROM users WHERE email=? AND password=?", (email, password))
     return c.fetchone()
 
 def check_plan(user):
@@ -75,23 +75,23 @@ if not st.session_state.user:
     tab1, tab2 = st.tabs(["Login", "Sign Up"])
 
     with tab1:
-        username = st.text_input("Username", key="login_user")
+        email = st.text_input("Email", key="login_email")
         password = st.text_input("Password", type="password", key="login_pass")
         if st.button("Login"):
-            user = login(username, password)
+            user = login(email, password)
             if user:
                 st.session_state.user = user
                 st.success("✅ Logged in successfully")
                 st.rerun()
             else:
-                st.error("❌ Invalid credentials")
+                st.error("❌ Invalid email or password")
 
     with tab2:
-        new_user = st.text_input("Create Username", key="signup_user")
+        new_email = st.text_input("Enter Email", key="signup_email")
         new_pass = st.text_input("Create Password", type="password", key="signup_pass")
         if st.button("Sign Up"):
-            signup(new_user, new_pass)
-            st.session_state.user = login(new_user, new_pass)  # Auto-login after signup
+            signup(new_email, new_pass)
+            st.session_state.user = login(new_email, new_pass)  # Auto-login after signup
             st.success("🎉 Account created! You are now logged in.")
             st.rerun()
 
@@ -102,11 +102,26 @@ else:
     plan_status = check_plan(user)
     if plan_status == "Expired":
         st.error("⚠️ Your free trial has expired. Please choose a plan.")
-        if st.button("Upgrade to Basic (₦2000/month)"):
-            c.execute("UPDATE users SET plan=? WHERE id=?", ("Basic", user[0]))
-            conn.commit()
-            st.success("✅ Subscribed to Basic Plan")
-            st.rerun()
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            if st.button("Basic (₦2000/month)"):
+                c.execute("UPDATE users SET plan=? WHERE id=?", ("Basic", user[0]))
+                conn.commit()
+                st.success("✅ Subscribed to Basic Plan")
+                st.rerun()
+        with col2:
+            if st.button("Pro (₦4000/month)"):
+                c.execute("UPDATE users SET plan=? WHERE id=?", ("Pro", user[0]))
+                conn.commit()
+                st.success("✅ Subscribed to Pro Plan")
+                st.rerun()
+        with col3:
+            if st.button("Premium (₦6000/month)"):
+                c.execute("UPDATE users SET plan=? WHERE id=?", ("Premium", user[0]))
+                conn.commit()
+                st.success("✅ Subscribed to Premium Plan")
+                st.rerun()
+
     else:
         st.info(f"📌 Current Plan: {plan_status}")
 

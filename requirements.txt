@@ -1,10 +1,3 @@
 streamlit
-passlib
-pyotp
-qrcode
-pillow
-sqlalchemy
-databases==0.5.7     # lightweight DB helper (optional)
-python-dotenv
-requests
-
+pandas
+numpy

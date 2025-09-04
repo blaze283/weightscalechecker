@@ -1,25 +1,13 @@
-# app.py
 import streamlit as st
 import sqlite3
 import bcrypt
-import base64
-import mimetypes
 import json
-import os
-from datetime import datetime, date, timedelta
-import smtplib
-from email.message import EmailMessage
+import mimetypes
+import base64
+from datetime import datetime
 
-# -----------------------
-# Config
-# -----------------------
-st.set_page_config(page_title="LMB Weight Scale Checker", page_icon="⚖️", layout="centered")
-DB_PATH = "users.db"
-
-# -----------------------
-# DB connection & schema
-# -----------------------
-conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+# ---------------- DATABASE ---------------- #
+conn = sqlite3.connect("users.db", check_same_thread=False)
 c = conn.cursor()
 
 # Users
@@ -27,7 +15,7 @@ c.execute("""
 CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     email TEXT UNIQUE,
-    password_hash TEXT
+    password TEXT
 )
 """)
 
@@ -36,254 +24,232 @@ c.execute("""
 CREATE TABLE IF NOT EXISTS settings (
     user_id INTEGER UNIQUE,
     theme TEXT DEFAULT 'light',
-    accent_color TEXT DEFAULT '#667eea'
+    accent_color TEXT DEFAULT '#4CAF50',
+    background_blob BLOB,
+    background_mime TEXT,
+    FOREIGN KEY(user_id) REFERENCES users(id)
 )
 """)
-conn.commit()
-
-# Add optional columns
-_optional_cols = {
-    "background_blob": "BLOB",
-    "background_mime": "TEXT",
-    "smtp_host": "TEXT",
-    "smtp_port": "INTEGER",
-    "smtp_email": "TEXT",
-    "smtp_password": "TEXT"
-}
-for col, coltype in _optional_cols.items():
-    try:
-        c.execute(f"ALTER TABLE settings ADD COLUMN {col} {coltype}")
-    except sqlite3.OperationalError:
-        pass
-conn.commit()
 
 # Saved plans
 c.execute("""
-CREATE TABLE IF NOT EXISTS saved_plans (
+CREATE TABLE IF NOT EXISTS plans (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER,
-    name TEXT,
     created_at TEXT,
     plan_json TEXT,
     FOREIGN KEY(user_id) REFERENCES users(id)
 )
 """)
-
-# Reminders
-c.execute("""
-CREATE TABLE IF NOT EXISTS reminders (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER,
-    title TEXT,
-    message TEXT,
-    recipient_email TEXT,
-    send_at TEXT,
-    created_at TEXT,
-    sent INTEGER DEFAULT 0,
-    FOREIGN KEY(user_id) REFERENCES users(id)
-)
-""")
 conn.commit()
 
-# -----------------------
-# Utility functions
-# -----------------------
-def hash_password(pw: str) -> str:
-    return bcrypt.hashpw(pw.encode(), bcrypt.gensalt()).decode()
-
-def verify_password(pw: str, hashed: str) -> bool:
+# ---------------- HELPERS ---------------- #
+def create_user(email, password):
+    hashed = bcrypt.hashpw(password.encode(), bcrypt.gensalt())
     try:
-        return bcrypt.checkpw(pw.encode(), hashed.encode())
-    except Exception:
+        c.execute("INSERT INTO users (email, password) VALUES (?, ?)", (email, hashed))
+        conn.commit()
+        return True
+    except sqlite3.IntegrityError:
         return False
 
-def create_user(email: str, password: str):
-    try:
-        h = hash_password(password)
-        c.execute("INSERT INTO users (email, password_hash) VALUES (?, ?)", (email.lower(), h))
-        conn.commit()
-        uid = c.lastrowid
-        c.execute("INSERT OR IGNORE INTO settings (user_id, theme, accent_color) VALUES (?, 'light', '#667eea')", (uid,))
-        conn.commit()
-        return True, None
-    except sqlite3.IntegrityError:
-        return False, "That email is already registered."
-
-def get_user_by_email(email: str):
-    c.execute("SELECT * FROM users WHERE email=?", (email.lower(),))
-    return c.fetchone()
-
-def authenticate(email: str, password: str):
-    user = get_user_by_email(email)
-    if not user:
-        return None
-    if verify_password(password, user[2]):
-        return user
+def authenticate_user(email, password):
+    c.execute("SELECT id, password FROM users WHERE email=?", (email,))
+    row = c.fetchone()
+    if row and bcrypt.checkpw(password.encode(), row[1]):
+        return row[0]
     return None
 
-def get_settings(user_id: int):
-    c.execute("""SELECT theme, accent_color, background_blob, background_mime,
-                        smtp_host, smtp_port, smtp_email, smtp_password
-                 FROM settings WHERE user_id=?""", (user_id,))
-    r = c.fetchone()
-    if r:
-        return {
-            "theme": r[0] or "light",
-            "accent_color": r[1] or "#667eea",
-            "background_blob": r[2],
-            "background_mime": r[3],
-            "smtp_host": r[4],
-            "smtp_port": r[5],
-            "smtp_email": r[6],
-            "smtp_password": r[7],
-        }
-    c.execute("INSERT OR IGNORE INTO settings (user_id, theme, accent_color) VALUES (?, 'light', '#667eea')", (user_id,))
-    conn.commit()
-    return {"theme":"light","accent_color":"#667eea","background_blob":None,"background_mime":None,"smtp_host":None,"smtp_port":None,"smtp_email":None,"smtp_password":None}
-
-def save_settings(user_id:int, theme:str, accent_color:str, smtp:dict=None, bg_blob:bytes=None, bg_mime:str=None):
-    if smtp:
-        c.execute("""
-            UPDATE settings
-            SET theme=?, accent_color=?, smtp_host=?, smtp_port=?, smtp_email=?, smtp_password=?
-            WHERE user_id=?
-        """, (theme, accent_color, smtp.get("host"), smtp.get("port"), smtp.get("email"), smtp.get("password"), user_id))
+def get_settings(user_id):
+    c.execute("SELECT theme, accent_color, background_blob, background_mime FROM settings WHERE user_id=?", (user_id,))
+    row = c.fetchone()
+    if row:
+        return {"theme": row[0], "accent_color": row[1], "background_blob": row[2], "background_mime": row[3]}
     else:
-        c.execute("UPDATE settings SET theme=?, accent_color=? WHERE user_id=?", (theme, accent_color, user_id))
-    if bg_blob is not None:
-        c.execute("UPDATE settings SET background_blob=?, background_mime=? WHERE user_id=?", (bg_blob, bg_mime, user_id))
+        c.execute("INSERT OR IGNORE INTO settings (user_id) VALUES (?)", (user_id,))
+        conn.commit()
+        return {"theme": "light", "accent_color": "#4CAF50", "background_blob": None, "background_mime": None}
+
+def save_settings(user_id, theme, accent_color, bg_blob=None, bg_mime=None):
+    c.execute("""
+        UPDATE settings
+        SET theme=?, accent_color=?, background_blob=?, background_mime=?
+        WHERE user_id=?
+    """, (theme, accent_color, bg_blob, bg_mime, user_id))
     conn.commit()
 
-def get_background(user_id:int):
-    c.execute("SELECT background_blob, background_mime FROM settings WHERE user_id=?", (user_id,))
-    r = c.fetchone()
-    return (r[0], r[1]) if r else (None, None)
+def save_plan(user_id, plan_dict):
+    c.execute("INSERT INTO plans (user_id, created_at, plan_json) VALUES (?, ?, ?)",
+              (user_id, datetime.now().isoformat(), json.dumps(plan_dict)))
+    conn.commit()
 
-# -----------------------
-# UI helpers
-# -----------------------
-def apply_theme(theme:str, accent_color:str):
+def get_plans(user_id):
+    c.execute("SELECT created_at, plan_json FROM plans WHERE user_id=? ORDER BY created_at DESC", (user_id,))
+    return [(row[0], json.loads(row[1])) for row in c.fetchall()]
+
+def apply_theme(theme, accent_color):
     if theme == "dark":
-        base_bg = "#0b0f12"
-        text = "#e6eef6"
+        bg_color, text_color = "#121212", "#e0e0e0"
     else:
-        base_bg = "#ffffff"
-        text = "#0b1724"
+        bg_color, text_color = "#ffffff", "#000000"
     css = f"""
     <style>
-    .stApp {{ background-color: {base_bg}; color: {text}; }}
-    .stButton>button {{ background-color: {accent_color}; color: white; border-radius: 8px; }}
-    .stDownloadButton>button {{ background: {accent_color}; color: white; border-radius: 8px; }}
-    .stTextInput>div>div>input, .stNumberInput>div>div>input, .stSelectbox>div>div, .stTextArea textarea {{
-        border: 1px solid {accent_color} !important; border-radius:6px;
+    .stApp {{
+        background-color: {bg_color};
+        color: {text_color};
     }}
-    .stMarkdown h1, .stMarkdown h2 {{ color: {text}; }}
+    .stButton>button {{
+        background-color: {accent_color};
+        color: white;
+        border-radius: 8px;
+        padding: 0.4em 1em;
+        border: none;
+    }}
+    .stButton>button:hover {{ opacity: 0.9; }}
+    .stTextInput>div>div>input, .stNumberInput input {{
+        border: 1px solid {accent_color};
+        border-radius: 6px;
+    }}
     </style>
     """
     st.markdown(css, unsafe_allow_html=True)
 
-def render_background_from_blob(blob:bytes, mime:str):
-    if not blob:
-        return
-    try:
-        b64 = base64.b64encode(blob).decode()
-        m = mime or "image/png"
-        css = f"""
-        <style>
-        .stApp {{
-            background-image: linear-gradient(rgba(0,0,0,0.18), rgba(0,0,0,0.18)), url("data:{m};base64,{b64}");
-            background-size: cover; background-position: center;
-        }}
-        </style>
-        """
-        st.markdown(css, unsafe_allow_html=True)
-    except Exception:
-        pass
+def render_background(blob, mime):
+    if blob and mime:
+        encoded = base64.b64encode(blob).decode()
+        st.markdown(
+            f"""
+            <style>
+            .stApp {{
+                background: url("data:{mime};base64,{encoded}");
+                background-size: cover;
+            }}
+            </style>
+            """,
+            unsafe_allow_html=True
+        )
 
-# -----------------------
-# APP START
-# -----------------------
-if "user" not in st.session_state:
-    st.session_state.user = None
+# ---------------- MEAL & WORKOUT GENERATOR ---------------- #
+def generate_plan(bmi_category, calories):
+    meal_templates = {
+        "Underweight": ["Oatmeal", "Chicken & Rice", "Protein Shake", "Steak & Potatoes"],
+        "Normal": ["Greek Yogurt", "Salad + Tuna", "Fruit Snack", "Fish & Veggies"],
+        "Overweight": ["Smoothie", "Grilled Chicken", "Nuts", "Salmon & Quinoa"],
+        "Obese": ["Veggie Omelet", "Soup & Salad", "Fruit", "Lean Protein + Veggies"],
+    }
+    workouts = {
+        "Underweight": ["Strength Training", "Compound Lifts"],
+        "Normal": ["Mixed Cardio & Strength"],
+        "Overweight": ["Moderate Cardio", "Strength (Light)"],
+        "Obese": ["Low-impact Cardio", "Stretching"],
+    }
+    days = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"]
+    plan = {"meals": {}, "workouts": {}}
+    for day in days:
+        plan["meals"][day] = [
+            {"meal": meal_templates[bmi_category][0], "time": "08:00"},
+            {"meal": meal_templates[bmi_category][1], "time": "13:00"},
+            {"meal": meal_templates[bmi_category][2], "time": "16:00"},
+            {"meal": meal_templates[bmi_category][3], "time": "19:00"},
+        ]
+        plan["workouts"][day] = [
+            {"workout": workouts[bmi_category][0], "time": "06:00"},
+            {"workout": workouts[bmi_category][1], "time": "18:00"},
+        ]
+    return plan
 
-st.title("⚖️ LMB Weight Scale Checker")
+# ---------------- APP ---------------- #
+st.set_page_config(page_title="LMB Weight Scale Checker", layout="centered")
 
-# --- AUTH ---
-if not st.session_state.user:
-    tab1, tab2 = st.tabs(["Login", "Sign Up"])
-    with tab1:
-        st.subheader("Login")
-        login_email = st.text_input("Email", key="login_email")
-        login_pw = st.text_input("Password", type="password", key="login_pw")
-        if st.button("Login"):
-            u = authenticate(login_email.strip().lower(), login_pw)
-            if u:
-                st.session_state.user = u
-                st.success("Logged in — welcome!")
-                st.rerun()
-            else:
-                st.error("Invalid credentials")
-    with tab2:
-        st.subheader("Sign up (auto-login)")
-        signup_email = st.text_input("Email", key="signup_email")
-        signup_pw = st.text_input("Password", type="password", key="signup_pw")
-        if st.button("Sign Up"):
-            ok, err = create_user(signup_email.strip().lower(), signup_pw)
-            if ok:
-                st.session_state.user = get_user_by_email(signup_email.strip().lower())
-                st.success("Account created and logged in!")
-                st.rerun()
-            else:
-                st.error(err)
-    st.stop()
+if "user_id" not in st.session_state:
+    st.session_state.user_id = None
 
-# --- MAIN APP ---
-user = st.session_state.user
-user_id = user[0]
-settings = get_settings(user_id)
+menu = ["Login", "Sign Up"] if not st.session_state.user_id else ["Home", "Saved Plans", "Settings", "Logout"]
+choice = st.sidebar.selectbox("Menu", menu)
 
-apply_theme(settings.get("theme") or "light", settings.get("accent_color") or "#667eea")
-bg_blob, bg_mime = settings.get("background_blob"), settings.get("background_mime")
-if bg_blob:
-    render_background_from_blob(bg_blob, bg_mime)
+# ---- SIGN UP ----
+if choice == "Sign Up":
+    st.subheader("Create Account")
+    email = st.text_input("Email")
+    password = st.text_input("Password", type="password")
+    if st.button("Sign Up"):
+        if create_user(email, password):
+            st.success("Account created! Please login.")
+        else:
+            st.error("Email already exists.")
 
-# Sidebar
-st.sidebar.markdown(f"**User:** {user[1]}")
-nav = st.sidebar.radio("Navigate", ["Home","Settings","Reminders","Saved Plans","Logout"])
+# ---- LOGIN ----
+elif choice == "Login":
+    st.subheader("Login")
+    email = st.text_input("Email")
+    password = st.text_input("Password", type="password")
+    if st.button("Login"):
+        user_id = authenticate_user(email, password)
+        if user_id:
+            st.session_state.user_id = user_id
+            st.success("Login successful!")
+            st.rerun()
+        else:
+            st.error("Invalid credentials.")
 
-if nav == "Logout":
-    st.session_state.user = None
-    st.rerun()
+# ---- LOGGED IN ----
+elif st.session_state.user_id:
+    user_id = st.session_state.user_id
+    settings = get_settings(user_id)
 
-# --- SETTINGS PAGE (updated with Remove Background) ---
-elif nav == "Settings":
-    st.header("⚙️ Settings & Customization")
-    st.write("Customize theme, pick accent color, upload/remove a background, and configure SMTP for reminders.")
+    # Apply theme + background
+    apply_theme(settings["theme"], settings["accent_color"])
+    render_background(settings["background_blob"], settings["background_mime"])
 
-    theme_choice = st.selectbox("Theme", ["light","dark"], index=0 if settings.get("theme","light")=="light" else 1)
-    accent = st.color_picker("Accent color", settings.get("accent_color") or "#667eea")
+    # ---- HOME ----
+    if choice == "Home":
+        st.title("🏋️ LMB Weight Scale Checker")
+        weight = st.number_input("Enter your weight (kg)", min_value=1.0, max_value=300.0, step=0.1)
+        height_ft = st.number_input("Height (feet)", min_value=1, max_value=8, step=1)
+        height_in = st.number_input("Height (inches)", min_value=0, max_value=11, step=1)
+        if weight and height_ft:
+            height_m = height_ft * 0.3048 + height_in * 0.0254
+            bmi = weight / (height_m**2)
+            if bmi < 18.5: cat = "Underweight"
+            elif bmi < 25: cat = "Normal"
+            elif bmi < 30: cat = "Overweight"
+            else: cat = "Obese"
+            st.write(f"**BMI: {bmi:.1f} → {cat}**")
+            calories = 2200 if cat=="Normal" else (2500 if cat=="Underweight" else 1800)
+            if st.button("Generate Weekly Meal & Exercise Plan"):
+                plan = generate_plan(cat, calories)
+                save_plan(user_id, plan)
+                st.success("Plan generated and saved!")
+                st.json(plan)
 
-    uploaded = st.file_uploader("Upload background image", type=["jpg","jpeg","png"])
+    # ---- SAVED PLANS ----
+    elif choice == "Saved Plans":
+        st.subheader("📚 Your Saved Plans")
+        plans = get_plans(user_id)
+        if not plans:
+            st.info("No saved plans yet.")
+        else:
+            for created, plan in plans:
+                with st.expander(f"Plan from {created}"):
+                    st.json(plan)
 
-    if st.button("Remove Background"):
-        c.execute("UPDATE settings SET background_blob=NULL, background_mime=NULL WHERE user_id=?", (user_id,))
-        conn.commit()
-        st.success("Background removed.")
-        st.rerun()
-
-    st.markdown("#### Optional: SMTP (for reminders)")
-    smtp_host = st.text_input("SMTP host", value=settings.get("smtp_host") or "")
-    smtp_port = st.number_input("SMTP port", value=int(settings.get("smtp_port") or 587))
-    smtp_email = st.text_input("SMTP login email", value=settings.get("smtp_email") or "")
-    smtp_password = st.text_input("SMTP password", type="password", value=settings.get("smtp_password") or "")
-
-    if st.button("Save Settings"):
-        blob = None
-        mime = None
+    # ---- SETTINGS ----
+    elif choice == "Settings":
+        st.subheader("Customize your app")
+        theme_choice = st.radio("Theme", ["light", "dark"], index=0 if settings["theme"]=="light" else 1)
+        accent = st.color_picker("Pick accent color", settings["accent_color"])
+        uploaded = st.file_uploader("Upload background image", type=["png","jpg","jpeg"])
+        blob, mime = settings["background_blob"], settings["background_mime"]
         if uploaded:
             blob = uploaded.read()
             mime = mimetypes.guess_type(uploaded.name)[0] or "image/png"
-        smtp = {"host": smtp_host or None, "port": smtp_port or None, "email": smtp_email or None, "password": smtp_password or None}
-        save_settings(user_id, theme_choice, accent, smtp=smtp, bg_blob=blob, bg_mime=mime)
-        st.success("Settings saved. Theme/background will apply after reload.")
+        if st.button("Save Settings"):
+            save_settings(user_id, theme_choice, accent, blob, mime)
+            st.success("Settings updated!")
+            st.rerun()
+
+    # ---- LOGOUT ----
+    elif choice == "Logout":
+        st.session_state.user_id = None
+        st.success("Logged out.")
         st.rerun()

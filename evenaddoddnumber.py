@@ -1,45 +1,47 @@
+# app.py
 import streamlit as st
 import sqlite3
+import bcrypt
 import base64
 import mimetypes
-import os, json, uuid
+import json
+import os
+import uuid
 from datetime import datetime, timedelta
-import bcrypt
 
-# =========================
-# App Config
-# =========================
-st.set_page_config(page_title="Health & Weight App", page_icon="⚖️", layout="centered")
-
+# -------------------------
+# Config & DB
+# -------------------------
+st.set_page_config(page_title="Health & Meal Planner", page_icon="⚖️", layout="centered")
 DB_PATH = "users.db"
-REMEMBER_FILE = "remember_me.json"
-
-# =========================
-# Database Setup
-# =========================
 conn = sqlite3.connect(DB_PATH, check_same_thread=False)
 c = conn.cursor()
 
-c.execute("""CREATE TABLE IF NOT EXISTS users (
+# Users & plans tables
+c.execute("""
+CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     email TEXT UNIQUE,
     password_hash TEXT,
     plan TEXT,
-    trial_end DATE,
-    remember_token TEXT
-)""")
-
-c.execute("""CREATE TABLE IF NOT EXISTS settings (
-    user_id INTEGER UNIQUE,
-    theme TEXT DEFAULT 'light',
-    default_unit TEXT DEFAULT 'Kilograms (kg)',
+    trial_end DATE
+)
+""")
+c.execute("""
+CREATE TABLE IF NOT EXISTS saved_plans (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER,
+    name TEXT,
+    created_at TEXT,
+    plan_json TEXT,
     FOREIGN KEY(user_id) REFERENCES users(id)
-)""")
+)
+""")
 conn.commit()
 
-# =========================
-# Helpers: Auth & Settings
-# =========================
+# -------------------------
+# Utilities: auth + crypto
+# -------------------------
 def hash_password(pw: str) -> str:
     return bcrypt.hashpw(pw.encode(), bcrypt.gensalt()).decode()
 
@@ -50,407 +52,327 @@ def verify_password(pw: str, hashed: str) -> bool:
         return False
 
 def create_user(email: str, password: str):
-    trial_end = (datetime.now() + timedelta(days=7)).strftime("%Y-%m-%d")
     try:
+        trial_end = (datetime.now() + timedelta(days=7)).strftime("%Y-%m-%d")
+        h = hash_password(password)
         c.execute("INSERT INTO users (email, password_hash, plan, trial_end) VALUES (?, ?, ?, ?)",
-                  (email, hash_password(password), "Free Trial", trial_end))
-        conn.commit()
-        user = get_user_by_email(email)
-        # default settings row
-        c.execute("INSERT OR IGNORE INTO settings (user_id, theme, default_unit) VALUES (?, 'light', 'Kilograms (kg)')",
-                  (user[0],))
+                  (email, h, "Free Trial", trial_end))
         conn.commit()
         return True, None
     except sqlite3.IntegrityError:
-        return False, "This email is already registered."
+        return False, "Email already registered."
 
 def get_user_by_email(email: str):
     c.execute("SELECT * FROM users WHERE email=?", (email,))
     return c.fetchone()
 
-def login(email: str, password: str):
+def authenticate(email: str, password: str):
     user = get_user_by_email(email)
-    if not user:
-        return None
+    if not user: return None
     if verify_password(password, user[2]):
         return user
     return None
 
-def set_remember_me(user_id: int, enabled: bool):
-    if enabled:
-        token = str(uuid.uuid4())
-        c.execute("UPDATE users SET remember_token=? WHERE id=?", (token, user_id))
-        conn.commit()
-        with open(REMEMBER_FILE, "w") as f:
-            json.dump({"uid": user_id, "token": token}, f)
-    else:
-        c.execute("UPDATE users SET remember_token=NULL WHERE id=?", (user_id,))
-        conn.commit()
-        if os.path.exists(REMEMBER_FILE):
-            os.remove(REMEMBER_FILE)
-
-def try_auto_login():
-    if not os.path.exists(REMEMBER_FILE):
-        return None
-    try:
-        data = json.load(open(REMEMBER_FILE, "r"))
-        uid, token = data.get("uid"), data.get("token")
-        if not uid or not token:
-            return None
-        c.execute("SELECT * FROM users WHERE id=? AND remember_token=?", (uid, token))
-        row = c.fetchone()
-        return row
-    except Exception:
-        return None
-
-def update_plan(user_id: int, new_plan: str):
-    c.execute("UPDATE users SET plan=? WHERE id=?", (new_plan, user_id))
+def save_plan_db(user_id: int, name: str, plan_obj: dict):
+    c.execute("INSERT INTO saved_plans (user_id, name, created_at, plan_json) VALUES (?, ?, ?, ?)",
+              (user_id, name, datetime.now().isoformat(), json.dumps(plan_obj)))
     conn.commit()
 
-def get_settings(user_id: int):
-    c.execute("SELECT theme, default_unit FROM settings WHERE user_id=?", (user_id,))
-    row = c.fetchone()
-    if row:
-        return {"theme": row[0], "default_unit": row[1]}
-    # ensure defaults
-    c.execute("INSERT OR IGNORE INTO settings (user_id, theme, default_unit) VALUES (?, 'light', 'Kilograms (kg)')", (user_id,))
-    conn.commit()
-    return {"theme": "light", "default_unit": "Kilograms (kg)"}
+def list_saved_plans(user_id: int):
+    c.execute("SELECT id, name, created_at FROM saved_plans WHERE user_id=? ORDER BY id DESC", (user_id,))
+    return c.fetchall()
 
-def save_settings(user_id: int, theme: str, default_unit: str):
-    c.execute("UPDATE settings SET theme=?, default_unit=? WHERE user_id=?", (theme, default_unit, user_id))
-    conn.commit()
+def load_saved_plan(plan_id: int):
+    c.execute("SELECT plan_json FROM saved_plans WHERE id=?", (plan_id,))
+    r = c.fetchone()
+    return json.loads(r[0]) if r else None
 
-def plan_status(user) -> str:
-    plan, trial_end = user[3], user[4]
-    if plan == "Free Trial":
-        try:
-            if datetime.now() > datetime.strptime(trial_end, "%Y-%m-%d"):
-                return "Expired"
-        except Exception:
-            return "Expired"
+# -------------------------
+# Conversions & BMI
+# -------------------------
+def kg_to_lbs(kg): return kg * 2.20462
+def lbs_to_kg(lbs): return lbs * 0.45359237
+
+def bmi_from(weight_kg: float, height_m: float):
+    if height_m <= 0: return None
+    return weight_kg / (height_m ** 2)
+
+def bmi_category(bmi: float):
+    if bmi < 18.5: return "Underweight", "🔵"
+    if bmi < 25: return "Normal", "🟢"
+    if bmi < 30: return "Overweight", "🟡"
+    return "Obese", "🔴"
+
+# -------------------------
+# Personalization logic
+# -------------------------
+def estimate_maintenance_calories(weight_kg: float):
+    # Simple rule-of-thumb (no age/sex): maintenance ≈ weight_kg * 25 kcal/day
+    return max(1200, weight_kg * 25)
+
+def target_calories(weight_kg: float, bmi_cat: str):
+    maintenance = estimate_maintenance_calories(weight_kg)
+    if bmi_cat == "Underweight":
+        return maintenance + 500
+    if bmi_cat == "Normal":
+        return maintenance
+    if bmi_cat == "Overweight":
+        return max(1200, maintenance - 400)
+    return max(1200, maintenance - 600)
+
+BASE_MEALS = {
+    "Breakfast": ["Oatmeal + banana", "Scrambled eggs + toast", "Smoothie + protein", "Pancakes + berries", "Boiled eggs + avocado"],
+    "Lunch": ["Grilled chicken + veggies", "Beef stir-fry + rice", "Tuna salad + greens", "Rice & beans", "Turkey sandwich"],
+    "Dinner": ["Salmon + brown rice", "Grilled fish + salad", "Steak + vegetables", "Pasta + chicken", "Vegetable soup + bread"],
+    "Snack": ["Nuts", "Yogurt", "Apple", "Carrots & hummus", "Granola"]
+}
+
+def make_weekly_meal_plan(target_cal: float):
+    # distribution: breakfast 25%, lunch 30%, dinner 30%, snack 15%
+    dist = {"Breakfast": 0.25, "Lunch": 0.30, "Dinner": 0.30, "Snack": 0.15}
+    days = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"]
+    plan = {}
+    for i,day in enumerate(days):
+        day_meals = {}
+        # pick meal by rotating BASE_MEALS lists for variety
+        for meal_type, choices in BASE_MEALS.items():
+            choice = choices[i % len(choices)]
+            cal = int(round(target_cal * dist[meal_type]))
+            # small note to adjust portion by target (we'll show cal)
+            day_meals[meal_type] = {"item": choice, "time": meal_default_time(meal_type), "cal": cal}
+        plan[day] = day_meals
     return plan
 
-# =========================
-# UI: Themes & Styling
-# =========================
-def inject_css(theme: str):
-    # Light / Dark palettes
-    if theme == "dark":
-        base_bg = "rgba(17,18,20,1)"
-        card_bg = "rgba(32,35,39,0.9)"
-        text = "#EAECEF"
-        accent = "#7dd3fc"
-        gradient1 = "#0ea5e9"
-        gradient2 = "#6366f1"
-    else:
-        base_bg = "white"
-        card_bg = "rgba(255,255,255,0.95)"
-        text = "#111827"
-        accent = "#2563eb"
-        gradient1 = "#667eea"
-        gradient2 = "#764ba2"
+def meal_default_time(meal_type):
+    times = {"Breakfast":"08:00", "Lunch":"13:00", "Dinner":"19:00", "Snack":"16:00"}
+    return times.get(meal_type, "12:00")
 
-    st.markdown(f"""
+def make_weekly_exercise_plan(bmi_cat: str, weight_kg: float):
+    # Create weekly exercise plan adapted to BMI category + weight scaling
+    # Scale factor: heavier users might want slightly lower-impact longer durations if overweight/obese
+    factor = 1.0
+    if bmi_cat == "Underweight": factor = 0.9
+    elif bmi_cat == "Normal": factor = 1.0
+    elif bmi_cat == "Overweight": factor = 1.15
+    else: factor = 1.2  # Obese: longer/lower-intensity sessions
+
+    days = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"]
+    plan = {}
+    for d in days:
+        if bmi_cat == "Underweight":
+            # focus on strength + light cardio
+            plan[d] = [
+                {"time":"07:00","activity":"Light cardio (15 min walk)"},
+                {"time":"07:20","activity":"Strength (bodyweight/resistance – 30 min)"}
+            ]
+        elif bmi_cat == "Normal":
+            plan[d] = [
+                {"time":"06:30","activity":"Cardio (30 min run/ride)"},
+                {"time":"07:10","activity":"Strength (30 min)"} if d in ["Monday","Wednesday","Friday"] else {"time":"07:10","activity":"Mobility / Stretching (15 min)"}
+            ]
+        elif bmi_cat == "Overweight":
+            if d in ["Monday","Wednesday","Friday"]:
+                plan[d] = [
+                    {"time":"06:00","activity":f"Moderate cardio ({int(30*factor)} min)"},
+                    {"time":"06:40","activity":"Strength (20-25 min)"}
+                ]
+            else:
+                plan[d] = [
+                    {"time":"07:00","activity":f"Brisk walk ({int(35*factor)} min)"},
+                    {"time":"07:40","activity":"Core & mobility (15 min)"}
+                ]
+        else: # Obese
+            if d in ["Monday","Wednesday","Friday"]:
+                plan[d] = [
+                    {"time":"06:00","activity":f"Low-impact cardio ({int(35*factor)} min)"},
+                    {"time":"06:45","activity":"Resistance + mobility (20 min)"}
+                ]
+            else:
+                plan[d] = [
+                    {"time":"07:00","activity":f"Walking or pool session ({int(40*factor)} min)"},
+                    {"time":"07:50","activity":"Gentle stretching (15 min)"}
+                ]
+    return plan
+
+# -------------------------
+# UI helpers
+# -------------------------
+def inject_css():
+    st.markdown("""
     <style>
-    .stApp {{
-        color: {text};
-        background: {base_bg};
-    }}
-    .title-header {{
-        background: linear-gradient(90deg, {gradient1}, {gradient2});
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-        text-align: center;
-        font-size: 2.2rem;
-        font-weight: 800;
-        margin-bottom: 10px;
-    }}
-    .info-card {{
-        background: {card_bg};
-        padding: 14px;
-        border-radius: 12px;
-        box-shadow: 0 8px 20px rgba(0,0,0,0.12);
-        margin: 10px 0;
-        border-left: 4px solid {accent};
-    }}
-    .metric-card {{
-        background: linear-gradient(135deg, {gradient1} 0%, {gradient2} 100%);
-        padding: 18px;
-        border-radius: 12px;
-        box-shadow: 0 8px 18px rgba(0,0,0,0.15);
-        color: white;
-        text-align: center;
-        margin: 10px 0;
-        border: 1px solid rgba(255,255,255,0.12);
-    }}
-    .result-card {{
-        background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);
-        padding: 14px;
-        border-radius: 10px;
-        box-shadow: 0 6px 16px rgba(0,0,0,0.12);
-        color: white;
-        text-align: center;
-        margin: 12px 0;
-        font-weight: 600;
-    }}
-    .upload-section {{
-        background: rgba(248,249,250,0.08);
-        padding: 14px;
-        border-radius: 10px;
-        border: 2px dashed rgba(229,231,235,0.35);
-        margin: 12px 0;
-        text-align: center;
-    }}
-    @keyframes slideIn {{
-        from {{ opacity: 0; transform: translateY(12px); }}
-        to {{ opacity: 1; transform: translateY(0); }}
-    }}
-    .animated-result {{ animation: slideIn 0.45s ease-out; }}
+    .title {font-weight:800; font-size:28px; text-align:center; margin-bottom:8px;}
+    .card {background:linear-gradient(135deg,#667eea,#764ba2); padding:12px; border-radius:10px; color:white}
+    .result {background:linear-gradient(135deg,#11998e,#38ef7d); padding:10px; border-radius:8px; color:white}
     </style>
     """, unsafe_allow_html=True)
 
-def apply_background(bg_file):
-    if bg_file is not None:
-        mime_type, _ = mimetypes.guess_type(bg_file.name)
-        encoded = base64.b64encode(bg_file.read()).decode()
+def apply_background(bg_image):
+    if bg_image is not None:
+        mime_type, _ = mimetypes.guess_type(bg_image.name)
+        encoded = base64.b64encode(bg_image.read()).decode()
         st.markdown(f"""
         <style>
         .stApp {{
-            background-image: linear-gradient(rgba(0,0,0,0.25), rgba(0,0,0,0.25)),
-                              url("data:{mime_type};base64,{encoded}");
+            background-image: linear-gradient(rgba(0,0,0,0.18), rgba(0,0,0,0.18)), url("data:{mime_type};base64,{encoded}");
             background-size: cover;
             background-position: center;
-            background-attachment: fixed;
         }}
         </style>
         """, unsafe_allow_html=True)
 
-# =========================
-# Conversions & BMI
-# =========================
-def kg_to_lbs(kg): return kg * 2.20462
-def lbs_to_kg(lbs): return lbs * 0.45359237
+# -------------------------
+# App layout & auth flow
+# -------------------------
+inject_css()
+st.title("⚖️ Personalized Health, Meal & Exercise Planner")
 
-def bmi_category(bmi: float):
-    if bmi < 18.5: return "Underweight", "🔵"
-    if bmi < 25:   return "Normal weight", "🟢"
-    if bmi < 30:   return "Overweight", "🟡"
-    return "Obese", "🔴"
+if "user" not in st.session_state:
+    st.session_state.user = None
 
-# =========================
-# Pages
-# =========================
-def page_home(user, settings):
-    inject_css(settings["theme"])
-    st.markdown('<h1 class="title-header">⚖️ Health & Weight Companion</h1>', unsafe_allow_html=True)
+# AUTH
+if not st.session_state.user:
+    auth_tabs = st.tabs(["Login","Sign Up"])
+    with auth_tabs[0]:
+        st.subheader("Login")
+        login_email = st.text_input("Email", key="login_email")
+        login_pw = st.text_input("Password", type="password", key="login_pw")
+        if st.button("Login"):
+            u = authenticate(login_email.strip().lower(), login_pw)
+            if u:
+                st.session_state.user = u
+                st.success("Logged in — welcome back!")
+                st.experimental_rerun()
+            else:
+                st.error("Invalid credentials.")
+    with auth_tabs[1]:
+        st.subheader("Create an account (7-day free trial)")
+        signup_email = st.text_input("Email", key="signup_email")
+        signup_pw = st.text_input("Password", type="password", key="signup_pw")
+        if st.button("Sign Up"):
+            ok, err = create_user(signup_email.strip().lower(), signup_pw)
+            if ok:
+                st.session_state.user = get_user_by_email(signup_email.strip().lower())
+                st.success("Account created — you are signed in!")
+                st.experimental_rerun()
+            else:
+                st.error(err)
+    st.info("Tip: After sign up you'll be logged in automatically.")
+    st.stop()
 
-    st.sidebar.markdown("### Account")
-    st.sidebar.write(f"Email: **{user[1]}**")
-    st.sidebar.write(f"Plan: **{plan_status(user)}**")
+# LOGGED-IN UI
+user = st.session_state.user
+st.sidebar.markdown(f"**User:** {user[1]}")
+st.sidebar.write(f"Plan: {user[3] or 'Free Trial'}")
+if st.sidebar.button("Log out"):
+    st.session_state.user = None
+    st.experimental_rerun()
 
-    # Quick nav
-    page = st.sidebar.radio("Navigate", ["Converter & BMI", "Subscription", "Settings", "Log out"])
+# Background customization
+st.markdown("### 🎨 Customize (optional)")
+bg = st.file_uploader("Upload background (jpg, png)", type=["jpg","jpeg","png"])
+apply_background(bg)
 
-    if page == "Converter & BMI":
-        converter_bmi_page(user, settings)
-    elif page == "Subscription":
-        subscription_page(user)
-    elif page == "Settings":
-        settings_page(user, settings)
-    else:
-        # Log out
-        set_remember_me(user[0], False)
-        st.session_state.user = None
-        st.rerun()
+# Inputs: unit, weight, height in ft+in
+st.markdown("### 🔢 Your measurements")
+col1, col2, col3 = st.columns([1.2,1,1])
+with col1:
+    unit_sel = st.selectbox("Weight unit", ["Kilograms (kg)","Pounds (lbs)"], index=0)
+with col2:
+    weight_input = st.number_input("Weight", min_value=0.1, max_value=999.9, format="%.1f", value=70.0)
+with col3:
+    # height feet and inches
+    feet = st.number_input("Feet", min_value=1, max_value=8, value=5)
+    inches = st.number_input("Inches", min_value=0, max_value=11, value=7)
 
-def converter_bmi_page(user, settings):
-    st.markdown('<div class="upload-section">', unsafe_allow_html=True)
-    st.markdown("### 🖼️ Optional: Customize Background")
-    bg = st.file_uploader("Upload background image (jpg/png)", type=["jpg", "jpeg", "png"])
-    st.markdown('</div>', unsafe_allow_html=True)
-    apply_background(bg)
+# convert to kg and meters
+weight_kg = weight_input if unit_sel.startswith("Kilograms") else lbs_to_kg(weight_input)
+height_m = (feet * 12 + inches) * 0.0254
 
+# compute BMI & category
+bmi = None
+bmi_text = ""
+if height_m > 0:
+    bmi = bmi_from(weight_kg, height_m)
+    cat, emoji = bmi_category(bmi)
+    bmi_text = f"{emoji} BMI: {bmi:.1f} — {cat}"
+
+# Show summary card
+st.markdown("---")
+st.markdown("<div class='card'><strong>Personal Summary</strong></div>", unsafe_allow_html=True)
+colA, colB, colC = st.columns(3)
+with colA:
+    st.metric("Weight (kg)", f"{weight_kg:.1f}")
+with colB:
+    st.metric("Height (m)", f"{height_m:.2f}")
+with colC:
+    st.metric("BMI", f"{bmi:.1f}" if bmi else "—")
+if bmi:
+    st.write(bmi_text)
+
+# Calculate caloric targets and generate plans
+maintenance = estimate_maintenance_calories(weight_kg)
+target = target_calories(weight_kg, cat)
+st.markdown("---")
+st.markdown("<div class='result'><strong>Estimated daily calories</strong></div>", unsafe_allow_html=True)
+st.write(f"- Maintenance estimate: **{int(maintenance)} kcal/day** (rule-of-thumb)")
+st.write(f"- Recommended target (based on BMI): **{int(target)} kcal/day**")
+
+# Buttons to generate weekly plans
+if st.button("Generate weekly Meal & Exercise Plan"):
+    weekly_meals = make_weekly_meal_plan(target)
+    weekly_ex = make_weekly_exercise_plan(cat, weight_kg)
+    st.session_state.generated_plan = {"created": datetime.now().isoformat(),
+                                       "weight_kg": weight_kg, "height_m": height_m, "bmi": bmi,
+                                       "bmi_category": cat, "daily_target_cal": int(target),
+                                       "meals": weekly_meals, "exercise": weekly_ex}
+    st.success("Weekly plan generated — scroll down to view it.")
+
+if "generated_plan" in st.session_state:
+    gp = st.session_state.generated_plan
+    st.markdown("## 📅 Your Weekly Meal Plan (personalized)")
+    for day, meals in gp["meals"].items():
+        with st.expander(f"{day} — approx {sum(m['cal'] for m in meals.values())} kcal"):
+            for meal_name, meal_info in meals.items():
+                st.write(f"- **{meal_name} ({meal_info['time']})**: {meal_info['item']} — approx **{meal_info['cal']} kcal**")
+
+    st.markdown("---")
+    st.markdown("## 🏋️ Weekly Exercise Plan (personalized)")
+    for day, activities in gp["exercise"].items():
+        with st.expander(day):
+            for a in activities:
+                st.write(f"- {a['time']} — {a['activity']}")
+
+    st.markdown("---")
+    # Save / Download
     col1, col2 = st.columns(2)
     with col1:
-        st.markdown('<div class="info-card">', unsafe_allow_html=True)
-        st.subheader("📏 Select Unit")
-        unit = st.selectbox("", ["Kilograms (kg)", "Pounds (lbs)"], index=0 if settings["default_unit"].startswith("Kilograms") else 1, key="unit_sel")
-        st.markdown('</div>', unsafe_allow_html=True)
-
+        plan_name = st.text_input("Plan name (for saving)", value=f"My plan {datetime.now().date()}")
+        if st.button("Save plan to my account"):
+            save_plan_db(user[0], plan_name, gp)
+            st.success("Saved to your account.")
     with col2:
-        st.markdown('<div class="info-card">', unsafe_allow_html=True)
-        st.subheader("🔢 Enter Weight")
-        weight = st.number_input("", min_value=0.1, max_value=999.9, step=0.1, format="%.1f", key="weight_in")
-        st.markdown('</div>', unsafe_allow_html=True)
+        st.download_button("Download plan (JSON)", data=json.dumps(gp, indent=2), file_name="weekly_plan.json", mime="application/json")
 
-    if weight > 0:
-        st.markdown('<div class="animated-result">', unsafe_allow_html=True)
-        if "Kilograms" in unit:
-            converted = kg_to_lbs(weight)
-            stones = converted / 14
-            ounces = converted * 16
-            grams = weight * 1000
+# Show previously saved plans
+st.markdown("---")
+st.markdown("### 💾 Previously saved plans")
+saved = list_saved_plans(user[0])
+if saved:
+    for pid, name, created in saved:
+        cols = st.columns([3,1,1])
+        cols[0].write(f"**{name}** — {created}")
+        if cols[1].button("Load", key=f"load_{pid}"):
+            sp = load_saved_plan(pid)
+            st.session_state.generated_plan = sp
+            st.success("Loaded plan into the generator view.")
+            st.experimental_rerun()
+        if cols[2].button("Delete", key=f"del_{pid}"):
+            c.execute("DELETE FROM saved_plans WHERE id=?", (pid,))
+            conn.commit()
+            st.experimental_rerun()
+else:
+    st.write("No saved plans yet. Generate a plan and save it!")
 
-            st.markdown(f'<div class="result-card"><h3>🎯 {weight:.1f} kg = {converted:.1f} lbs</h3></div>', unsafe_allow_html=True)
-            c3, c4, c5 = st.columns(3)
-            with c3: st.markdown(f'<div class="metric-card"><h4>🪨 Stones</h4><h2>{stones:.1f}</h2></div>', unsafe_allow_html=True)
-            with c4: st.markdown(f'<div class="metric-card"><h4>⚖️ Ounces</h4><h2>{ounces:.0f}</h2></div>', unsafe_allow_html=True)
-            with c5: st.markdown(f'<div class="metric-card"><h4>📊 Grams</h4><h2>{grams:.0f}</h2></div>', unsafe_allow_html=True)
-        else:
-            converted = lbs_to_kg(weight)
-            stones = weight / 14
-            ounces = weight * 16
-            grams = converted * 1000
-
-            st.markdown(f'<div class="result-card"><h3>🎯 {weight:.1f} lbs = {converted:.1f} kg</h3></div>', unsafe_allow_html=True)
-            c3, c4, c5 = st.columns(3)
-            with c3: st.markdown(f'<div class="metric-card"><h4>🪨 Stones</h4><h2>{stones:.1f}</h2></div>', unsafe_allow_html=True)
-            with c4: st.markdown(f'<div class="metric-card"><h4>⚖️ Ounces</h4><h2>{ounces:.0f}</h2></div>', unsafe_allow_html=True)
-            with c5: st.markdown(f'<div class="metric-card"><h4>📊 Grams</h4><h2>{grams:.0f}</h2></div>', unsafe_allow_html=True)
-        st.markdown('</div>', unsafe_allow_html=True)
-
-        # BMI with height in feet + inches
-        st.markdown("---")
-        st.markdown('<div class="info-card">', unsafe_allow_html=True)
-        st.subheader("🧮 BMI Calculator (Feet + Inches)")
-        ch1, ch2 = st.columns(2)
-        with ch1:
-            feet = st.number_input("Height (feet)", 1, 8, value=5)
-        with ch2:
-            inches = st.number_input("Height (inches)", 0, 11, value=7)
-        height_m = (feet * 12 + inches) * 0.0254
-        if height_m > 0:
-            weight_kg = weight if "Kilograms" in unit else lbs_to_kg(weight)
-            bmi = weight_kg / (height_m ** 2)
-            cat, emoji = bmi_category(bmi)
-            st.markdown(f'<div class="result-card"><h3>{emoji} BMI: {bmi:.1f}</h3><p>Category: <strong>{cat}</strong></p></div>', unsafe_allow_html=True)
-        st.markdown('</div>', unsafe_allow_html=True)
-
-        # Meal & Exercise (simple)
-        st.markdown("---")
-        st.subheader("🍽️ Sample Day Meal Plan (with times)")
-        st.write("- Breakfast (08:00): Oatmeal + Banana")
-        st.write("- Lunch (13:00): Grilled Chicken + Veggies")
-        st.write("- Snack (16:00): Nuts")
-        st.write("- Dinner (19:00): Salmon + Brown Rice")
-
-        st.markdown("---")
-        st.subheader("🏃 Sample Exercise (Beginner)")
-        st.write("- 07:00 — 10 min walk")
-        st.write("- 07:15 — 15 squats")
-        st.write("- 07:20 — 10 push-ups")
-
-def subscription_page(user):
-    st.markdown('<h3 class="title-header">💳 Subscription</h3>', unsafe_allow_html=True)
-    status = plan_status(user)
-    st.info(f"Current plan: **{status}**")
-
-    if status == "Expired":
-        st.warning("Your free trial has ended. Choose a plan to continue.")
-    st.markdown('<div class="info-card">', unsafe_allow_html=True)
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.subheader("Basic")
-        st.write("₦2000 / month")
-        if st.button("Pay Basic"):
-            simulate_payment_and_activate(user[0], "Basic")
-    with col2:
-        st.subheader("Pro")
-        st.write("₦4000 / month")
-        if st.button("Pay Pro"):
-            simulate_payment_and_activate(user[0], "Pro")
-    with col3:
-        st.subheader("Premium")
-        st.write("₦6000 / month")
-        if st.button("Pay Premium"):
-            simulate_payment_and_activate(user[0], "Premium")
-    st.markdown('</div>', unsafe_allow_html=True)
-
-    st.caption("Demo payment: this simulates a successful payment and activates your plan immediately.")
-
-def simulate_payment_and_activate(user_id: int, plan: str):
-    # In real life, call Flutterwave/Paystack here and verify -> then:
-    update_plan(user_id, plan)
-    st.success(f"✅ Payment successful! Your plan is now **{plan}**.")
-    st.rerun()
-
-def settings_page(user, settings):
-    st.markdown('<h3 class="title-header">⚙️ Settings</h3>', unsafe_allow_html=True)
-    st.markdown('<div class="info-card">', unsafe_allow_html=True)
-    theme = st.selectbox("Theme", ["light", "dark"], index=0 if settings["theme"] == "light" else 1)
-    default_unit = st.selectbox("Default weight unit", ["Kilograms (kg)", "Pounds (lbs)"],
-                                index=0 if settings["default_unit"].startswith("Kilograms") else 1)
-    remember = st.checkbox("Remember me on this device", value=os.path.exists(REMEMBER_FILE))
-    if st.button("Save Settings"):
-        save_settings(user[0], theme, default_unit)
-        set_remember_me(user[0], remember)
-        st.success("✅ Settings saved.")
-        st.rerun()
-    st.markdown('</div>', unsafe_allow_html=True)
-
-# =========================
-# Auth Screen
-# =========================
-def auth_screen():
-    # Try auto-login
-    if "user" not in st.session_state or st.session_state.user is None:
-        auto = try_auto_login()
-        if auto:
-            st.session_state.user = auto
-
-    if st.session_state.get("user"):
-        user = st.session_state.user
-        settings = get_settings(user[0])
-        page_home(user, settings)
-        return
-
-    st.markdown('<h1 class="title-header">Welcome — Sign in or Create an Account</h1>', unsafe_allow_html=True)
-    tab1, tab2 = st.tabs(["Login", "Sign Up"])
-
-    with tab1:
-        st.markdown('<div class="info-card">', unsafe_allow_html=True)
-        email = st.text_input("Email", key="login_email")
-        pw = st.text_input("Password", type="password", key="login_pw")
-        remember = st.checkbox("Remember me")
-        if st.button("Login"):
-            user = login(email, pw)
-            if user:
-                st.session_state.user = user
-                set_remember_me(user[0], remember)
-                st.success("✅ Logged in!")
-                st.rerun()
-            else:
-                st.error("❌ Invalid email or password")
-        st.markdown('</div>', unsafe_allow_html=True)
-
-    with tab2:
-        st.markdown('<div class="info-card">', unsafe_allow_html=True)
-        email = st.text_input("Email", key="signup_email")
-        pw = st.text_input("Create password", type="password", key="signup_pw")
-        if st.button("Sign Up"):
-            ok, err = create_user(email, pw)
-            if ok:
-                user = login(email, pw)  # auto-login
-                st.session_state.user = user
-                set_remember_me(user[0], True)  # default remember new users
-                st.success("🎉 Account created! You’re logged in with a 7-day free trial.")
-                st.rerun()
-            else:
-                st.error(f"❌ {err}")
-        st.markdown('</div>', unsafe_allow_html=True)
-
-# =========================
-# Entry
-# =========================
-def main():
-    # Use user theme even on auth screen (light by default)
-    user = st.session_state.get("user")
-    theme = "light"
-    if user:
-        theme = get_settings(user[0])["theme"]
-    inject_css(theme)
-    auth_screen()
-
-if __name__ == "__main__":
-    main()
+# Footer
+st.markdown("---")
+st.caption("This planner estimates calories and suggests meals & workouts for demo/personal use. For medical advice, consult a professional.")

@@ -21,7 +21,6 @@ import time
 from datetime import datetime, timedelta, date
 import math
 import pandas as pd
-from fpdf import FPDF
 from PIL import Image
 import io
 
@@ -552,4 +551,5 @@ with col2:
 # Footer / notes
 st.markdown("---")
 st.caption("This prototype simulates AI food recognition, OAuth, BLE and payments. Replace simulation stubs with production services: TensorFlow or cloud Vision for food recognition; Firebase Auth for OAuth; BLE libraries and mobile app for real watch pairing; Stripe/Flutterwave/Shopify for payments and orders.")
+
 

@@ -1,521 +1,398 @@
-# app.py
 import streamlit as st
 import sqlite3
-import bcrypt
-import base64
-import mimetypes
-import json
-import io
-import os
-from datetime import datetime, date, time, timedelta
-import smtplib
-from email.message import EmailMessage
+import time
+from datetime import datetime, timedelta
+import math
+import uuid
 
 # -----------------------
-# Config
+# VitalSync Pro - Streamlit Prototype
+# Single-file prototype demonstrating:
+# - Simple "OAuth" simulated sign-in (placeholders)
+# - Package registration (Free/Premium/Pro)
+# - Add allergies/dietary restrictions
+# - Input height/weight -> generate meal plan
+# - Order smartwatch (mock order stored)
+# - Timers for meal, hydration, medication, and workouts
+# - Simple SQLite persistence
+# NOTE: This is a prototype. Real OAuth, payments, and wearable integrations
+# require production-ready implementations and credentials.
 # -----------------------
-st.set_page_config(page_title="LMB Weight Scale Checker", page_icon="⚖️", layout="centered")
-DB_PATH = "users.db"
 
-# -----------------------
-# DB connection & schema (stable)
-# -----------------------
-conn = sqlite3.connect(DB_PATH, check_same_thread=False)
-c = conn.cursor()
-
-# Users
-c.execute("""
-CREATE TABLE IF NOT EXISTS users (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    email TEXT UNIQUE,
-    password_hash TEXT
-)
-""")
-
-# Settings (base)
-c.execute("""
-CREATE TABLE IF NOT EXISTS settings (
-    user_id INTEGER UNIQUE,
-    theme TEXT DEFAULT 'light',
-    accent_color TEXT DEFAULT '#667eea'
-)
-""")
-conn.commit()
-
-# Add optional columns if missing (safe migration)
-_optional_cols = {
-    "background_blob": "BLOB",
-    "background_mime": "TEXT",
-    "smtp_host": "TEXT",
-    "smtp_port": "INTEGER",
-    "smtp_email": "TEXT",
-    "smtp_password": "TEXT"
-}
-for col, coltype in _optional_cols.items():
-    try:
-        c.execute(f"ALTER TABLE settings ADD COLUMN {col} {coltype}")
-    except sqlite3.OperationalError:
-        pass
-conn.commit()
-
-# Saved plans
-c.execute("""
-CREATE TABLE IF NOT EXISTS saved_plans (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER,
-    name TEXT,
-    created_at TEXT,
-    plan_json TEXT,
-    FOREIGN KEY(user_id) REFERENCES users(id)
-)
-""")
-
-# Reminders
-c.execute("""
-CREATE TABLE IF NOT EXISTS reminders (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER,
-    title TEXT,
-    message TEXT,
-    recipient_email TEXT,
-    send_at TEXT,
-    created_at TEXT,
-    sent INTEGER DEFAULT 0,
-    FOREIGN KEY(user_id) REFERENCES users(id)
-)
-""")
-conn.commit()
+DB_PATH = "vitalsync_pro.db"
 
 # -----------------------
-# Utility functions: auth & settings
+# Database helpers
 # -----------------------
-def hash_password(pw: str) -> str:
-    return bcrypt.hashpw(pw.encode(), bcrypt.gensalt()).decode()
 
-def verify_password(pw: str, hashed: str) -> bool:
-    try:
-        return bcrypt.checkpw(pw.encode(), hashed.encode())
-    except Exception:
-        return False
-
-def create_user(email: str, password: str):
-    try:
-        h = hash_password(password)
-        c.execute("INSERT INTO users (email, password_hash) VALUES (?, ?)", (email.lower(), h))
-        conn.commit()
-        uid = c.lastrowid
-        c.execute("INSERT OR IGNORE INTO settings (user_id, theme, accent_color) VALUES (?, 'light', '#667eea')", (uid,))
-        conn.commit()
-        return True, None
-    except sqlite3.IntegrityError:
-        return False, "That email is already registered."
-
-def get_user_by_email(email: str):
-    c.execute("SELECT * FROM users WHERE email=?", (email.lower(),))
-    return c.fetchone()
-
-def authenticate(email: str, password: str):
-    user = get_user_by_email(email)
-    if not user:
-        return None
-    if verify_password(password, user[2]):
-        return user
-    return None
-
-def get_settings(user_id: int):
-    c.execute("""SELECT theme, accent_color, background_blob, background_mime,
-                        smtp_host, smtp_port, smtp_email, smtp_password
-                 FROM settings WHERE user_id=?""", (user_id,))
-    r = c.fetchone()
-    if r:
-        return {
-            "theme": r[0] or "light",
-            "accent_color": r[1] or "#667eea",
-            "background_blob": r[2],
-            "background_mime": r[3],
-            "smtp_host": r[4],
-            "smtp_port": r[5],
-            "smtp_email": r[6],
-            "smtp_password": r[7],
-        }
-    c.execute("INSERT OR IGNORE INTO settings (user_id, theme, accent_color) VALUES (?, 'light', '#667eea')", (user_id,))
-    conn.commit()
-    return {"theme":"light","accent_color":"#667eea","background_blob":None,"background_mime":None,"smtp_host":None,"smtp_port":None,"smtp_email":None,"smtp_password":None}
-
-def save_settings(user_id:int, theme:str, accent_color:str, smtp:dict=None, bg_blob:bytes=None, bg_mime:str=None):
-    if smtp:
-        c.execute("""
-            UPDATE settings
-            SET theme=?, accent_color=?, smtp_host=?, smtp_port=?, smtp_email=?, smtp_password=?
-            WHERE user_id=?
-        """, (theme, accent_color, smtp.get("host"), smtp.get("port"), smtp.get("email"), smtp.get("password"), user_id))
-    else:
-        c.execute("UPDATE settings SET theme=?, accent_color=? WHERE user_id=?", (theme, accent_color, user_id))
-    if bg_blob is not None:
-        c.execute("UPDATE settings SET background_blob=?, background_mime=? WHERE user_id=?", (bg_blob, bg_mime, user_id))
-    conn.commit()
-
-def get_background(user_id:int):
-    c.execute("SELECT background_blob, background_mime FROM settings WHERE user_id=?", (user_id,))
-    r = c.fetchone()
-    return (r[0], r[1]) if r else (None, None)
-
-# -----------------------
-# Planner helpers
-# -----------------------
-def lbs_to_kg(lbs): return lbs * 0.45359237
-def kg_to_lbs(kg): return kg * 2.20462
-def bmi_calc(weight_kg, height_m):
-    return (weight_kg / (height_m**2)) if (height_m and height_m>0) else None
-
-BASE_MEALS = {
-    "Breakfast": ["Oatmeal + banana", "Scrambled eggs + toast", "Smoothie + protein", "Pancakes + berries", "Boiled eggs + avocado"],
-    "Lunch": ["Grilled chicken + veggies", "Beef stir-fry + rice", "Tuna salad + greens", "Rice & beans", "Turkey sandwich"],
-    "Dinner": ["Salmon + brown rice", "Grilled fish + salad", "Steak + vegetables", "Pasta + chicken", "Vegetable soup + bread"],
-    "Snack": ["Nuts", "Yogurt", "Apple", "Carrots & hummus", "Granola"]
-}
-
-def meal_default_time(meal_type):
-    return {"Breakfast":"08:00","Lunch":"13:00","Dinner":"19:00","Snack":"16:00"}.get(meal_type,"12:00")
-
-def estimate_maintenance_calories(weight_kg):
-    return max(1200, int(round(weight_kg * 25)))
-
-def make_weekly_meal_plan(target_cal):
-    dist = {"Breakfast": 0.25, "Lunch": 0.30, "Dinner": 0.30, "Snack": 0.15}
-    days = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"]
-    plan = {}
-    for i,day in enumerate(days):
-        day_meals = {}
-        for mtype, choices in BASE_MEALS.items():
-            choice = choices[i % len(choices)]
-            cal = int(round(target_cal * dist[mtype]))
-            day_meals[mtype] = {"item": choice, "time": meal_default_time(mtype), "cal": cal}
-        plan[day] = day_meals
-    return plan
-
-def make_weekly_exercise_plan(bmi_cat):
-    days = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"]
-    plan = {}
-    for d in days:
-        if bmi_cat == "Underweight":
-            plan[d] = [{"time":"07:00","activity":"Light cardio (15 min)"},{"time":"07:20","activity":"Strength training (30 min)"}]
-        elif bmi_cat == "Normal":
-            if d in ["Monday","Wednesday","Friday"]:
-                plan[d] = [{"time":"06:30","activity":"Cardio (30 min)"},{"time":"07:10","activity":"Strength (30 min)"}]
-            else:
-                plan[d] = [{"time":"07:00","activity":"Mobility / Stretch (20 min)"}]
-        elif bmi_cat == "Overweight":
-            if d in ["Monday","Wednesday","Friday"]:
-                plan[d] = [{"time":"06:00","activity":"Moderate cardio (35 min)"},{"time":"06:40","activity":"Strength (25 min)"}]
-            else:
-                plan[d] = [{"time":"07:00","activity":"Brisk walk (30-40 min)"}]
-        else:
-            plan[d] = [{"time":"06:00","activity":"Low-impact cardio (30-40 min)"}]
-    return plan
-
-# -----------------------
-# Reminders helpers
-# -----------------------
-def save_reminder(user_id:int, title:str, message:str, recipient:str, send_at_iso:str):
-    c.execute("INSERT INTO reminders (user_id, title, message, recipient_email, send_at, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-              (user_id, title, message, recipient, send_at_iso, datetime.utcnow().isoformat()))
-    conn.commit()
-
-def list_reminders(user_id:int, include_sent=False):
-    if include_sent:
-        c.execute("SELECT id, title, recipient_email, send_at, sent FROM reminders WHERE user_id=? ORDER BY send_at DESC", (user_id,))
-    else:
-        c.execute("SELECT id, title, recipient_email, send_at, sent FROM reminders WHERE user_id=? AND sent=0 ORDER BY send_at ASC", (user_id,))
-    return c.fetchall()
-
-def mark_reminder_sent(reminder_id:int):
-    c.execute("UPDATE reminders SET sent=1 WHERE id=?", (reminder_id,))
-    conn.commit()
-
-def send_email_via_smtp(smtp_host, smtp_port, smtp_email, smtp_password, to_email, subject, body):
-    msg = EmailMessage()
-    msg["From"] = smtp_email
-    msg["To"] = to_email
-    msg["Subject"] = subject
-    msg.set_content(body)
-    server = smtplib.SMTP(smtp_host, int(smtp_port), timeout=15)
-    server.ehlo()
-    server.starttls()
-    server.login(smtp_email, smtp_password)
-    server.send_message(msg)
-    server.quit()
-    return True
-
-def check_and_send_due_reminders():
-    now_iso = datetime.utcnow().isoformat()
-    c.execute("""
-        SELECT r.id, r.title, r.message, r.recipient_email, s.smtp_host, s.smtp_port, s.smtp_email, s.smtp_password
-        FROM reminders r JOIN settings s ON r.user_id = s.user_id
-        WHERE r.sent=0 AND r.send_at <= ?
-    """, (now_iso,))
-    rows = c.fetchall()
-    sent = 0
-    failed = 0
-    for rid, title, message, recipient, host, port, mail, pw in rows:
-        if not (host and port and mail and pw):
-            failed += 1
-            continue
-        try:
-            send_email_via_smtp(host, port or 587, mail, pw, recipient, title or "Reminder", message or "")
-            mark_reminder_sent(rid)
-            sent += 1
-        except Exception:
-            failed += 1
-    return {"sent": sent, "failed": failed}
-
-# -----------------------
-# UI helpers
-# -----------------------
-def apply_theme(theme:str, accent_color:str):
-    if theme == "dark":
-        base_bg = "#0b0f12"
-        text = "#e6eef6"
-    else:
-        base_bg = "#ffffff"
-        text = "#0b1724"
-    css = f"""
-    <style>
-    .stApp {{ background-color: {base_bg}; color: {text}; }}
-    .stButton>button {{ background-color: {accent_color}; color: white; border-radius: 8px; }}
-    .stDownloadButton>button {{ background: {accent_color}; color: white; border-radius: 8px; }}
-    .stTextInput>div>div>input, .stNumberInput>div>div>input, .stSelectbox>div>div, .stTextArea textarea {{
-        border: 1px solid {accent_color} !important; border-radius:6px;
-    }}
-    .stMarkdown h1, .stMarkdown h2 {{ color: {text}; }}
-    </style>
-    """
-    st.markdown(css, unsafe_allow_html=True)
-
-def render_background_from_blob(blob:bytes, mime:str):
-    if not blob:
-        return
-    try:
-        b64 = base64.b64encode(blob).decode()
-        m = mime or "image/png"
-        css = f"""
-        <style>
-        .stApp {{
-            background-image: linear-gradient(rgba(0,0,0,0.18), rgba(0,0,0,0.18)), url("data:{m};base64,{b64}");
-            background-size: cover; background-position: center;
-        }}
-        </style>
+def init_db():
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute(
         """
-        st.markdown(css, unsafe_allow_html=True)
-    except Exception:
-        pass
+        CREATE TABLE IF NOT EXISTS users (
+            id TEXT PRIMARY KEY,
+            name TEXT,
+            email TEXT,
+            package TEXT,
+            height_cm REAL,
+            weight_kg REAL,
+            allergies TEXT
+        )
+        """
+    )
+    c.execute(
+        """
+        CREATE TABLE IF NOT EXISTS orders (
+            id TEXT PRIMARY KEY,
+            user_id TEXT,
+            product TEXT,
+            price REAL,
+            created_at TEXT
+        )
+        """
+    )
+    c.execute(
+        """
+        CREATE TABLE IF NOT EXISTS timers (
+            id TEXT PRIMARY KEY,
+            user_id TEXT,
+            type TEXT,
+            label TEXT,
+            end_ts REAL
+        )
+        """
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_user(user_id):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT * FROM users WHERE id=?", (user_id,))
+    row = c.fetchone()
+    conn.close()
+    return row
+
+
+def save_user(user):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute(
+        "REPLACE INTO users (id, name, email, package, height_cm, weight_kg, allergies) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (user['id'], user['name'], user['email'], user['package'], user.get('height_cm'), user.get('weight_kg'), ','.join(user.get('allergies', [])))
+    )
+    conn.commit()
+    conn.close()
+
+
+def add_order(user_id, product, price):
+    oid = str(uuid.uuid4())
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("INSERT INTO orders (id, user_id, product, price, created_at) VALUES (?, ?, ?, ?, ?)",
+              (oid, user_id, product, price, datetime.utcnow().isoformat()))
+    conn.commit()
+    conn.close()
+    return oid
+
+
+def add_timer(user_id, ttype, label, seconds):
+    tid = str(uuid.uuid4())
+    end_ts = time.time() + seconds
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("INSERT INTO timers (id, user_id, type, label, end_ts) VALUES (?, ?, ?, ?, ?)",
+              (tid, user_id, ttype, label, end_ts))
+    conn.commit()
+    conn.close()
+    return tid
+
+
+def get_timers(user_id):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT id, type, label, end_ts FROM timers WHERE user_id=?", (user_id,))
+    rows = c.fetchall()
+    conn.close()
+    return rows
+
+
+def remove_timer(tid):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("DELETE FROM timers WHERE id=?", (tid,))
+    conn.commit()
+    conn.close()
 
 # -----------------------
-# App UI & flow
+# Utility functions
 # -----------------------
-if "user" not in st.session_state:
-    st.session_state.user = None
 
-st.title("⚖️ LMB Weight Scale Checker")
+def bmi(weight_kg, height_cm):
+    if not weight_kg or not height_cm:
+        return None
+    h_m = height_cm / 100.0
+    return weight_kg / (h_m * h_m)
 
-# --- AUTH ---
+
+def generate_meal_plan(height_cm, weight_kg, allergies, goal='maintain'):
+    # Very simple calorie estimate (Mifflin-St Jeor would be more accurate)
+    b = bmi(weight_kg, height_cm)
+    if b is None:
+        return None
+    # base calorie by BMI roughness
+    if b < 18.5:
+        cal = 2200
+    elif b < 25:
+        cal = 2000
+    elif b < 30:
+        cal = 1800
+    else:
+        cal = 1600
+
+    if goal == 'lose':
+        cal -= 300
+    elif goal == 'gain':
+        cal += 300
+
+    # Simple macro split
+    protein_g = int(0.25 * cal / 4)
+    fats_g = int(0.25 * cal / 9)
+    carbs_g = int(0.5 * cal / 4)
+
+    # Create a 3-meal sample plan, filter out allergies
+    meal_templates = [
+        {
+            'name': 'Breakfast',
+            'items': ['Oatmeal', 'Banana', 'Eggs', 'Yogurt']
+        },
+        {
+            'name': 'Lunch',
+            'items': ['Grilled Chicken', 'Brown Rice', 'Steamed Vegetables', 'Salad']
+        },
+        {
+            'name': 'Dinner',
+            'items': ['Baked Fish', 'Quinoa', 'Roasted Veggies', 'Green Salad']
+        }
+    ]
+
+    # allergy filter: if an allergy keyword appears in item, remove that item
+    filtered = []
+    allergy_keys = [a.strip().lower() for a in (allergies or []) if a.strip()]
+    for meal in meal_templates:
+        items = []
+        for it in meal['items']:
+            low = it.lower()
+            bad = False
+            for a in allergy_keys:
+                if a in low or a in it.lower():
+                    bad = True
+                    break
+            if not bad:
+                items.append(it)
+        if not items:
+            items = ['(No suitable item - check allergies)']
+        filtered.append({'name': meal['name'], 'items': items})
+
+    return {
+        'calories': cal,
+        'protein_g': protein_g,
+        'fats_g': fats_g,
+        'carbs_g': carbs_g,
+        'meals': filtered
+    }
+
+# -----------------------
+# Streamlit UI
+# -----------------------
+
+st.set_page_config(page_title='VitalSync Pro (Prototype)', layout='wide')
+init_db()
+
+if 'user' not in st.session_state:
+    st.session_state['user'] = None
+
+st.title('VitalSync Pro — Health App Prototype')
+
+# -----------------------
+# Authentication (simulated for prototype)
+# -----------------------
+with st.expander('Sign in / Register'):
+    col1, col2 = st.columns(2)
+    with col1:
+        st.subheader('Sign in (simulated)')
+        email = st.text_input('Email', key='email')
+        name = st.text_input('Name', key='name')
+        if st.button('Register / Sign in'):
+            uid = str(uuid.uuid5(uuid.NAMESPACE_DNS, email))
+            user = get_user(uid)
+            if user is None:
+                # create default
+                st.session_state.user = {
+                    'id': uid,
+                    'name': name or 'User',
+                    'email': email,
+                    'package': 'Free',
+                    'height_cm': None,
+                    'weight_kg': None,
+                    'allergies': []
+                }
+                save_user(st.session_state.user)
+            else:
+                # load from DB
+                st.session_state.user = {
+                    'id': user[0],
+                    'name': user[1],
+                    'email': user[2],
+                    'package': user[3] or 'Free',
+                    'height_cm': user[4],
+                    'weight_kg': user[5],
+                    'allergies': (user[6].split(',') if user[6] else [])
+                }
+            st.success('Signed in as ' + st.session_state.user['email'])
+    with col2:
+        st.subheader('OAuth Providers (simulated)')
+        st.write('Real OAuth requires app credentials; this prototype simulates sign-in.')
+        if st.button('Sign in with Google'):
+            email = 'user_google@example.com'
+            uid = str(uuid.uuid5(uuid.NAMESPACE_DNS, email))
+            st.session_state.user = {'id': uid, 'name': 'Google User', 'email': email, 'package': 'Free', 'height_cm': None, 'weight_kg': None, 'allergies': []}
+            save_user(st.session_state.user)
+            st.success('Signed in with Google: ' + email)
+        if st.button('Sign in with Apple'):
+            email = 'user_apple@example.com'
+            uid = str(uuid.uuid5(uuid.NAMESPACE_DNS, email))
+            st.session_state.user = {'id': uid, 'name': 'Apple User', 'email': email, 'package': 'Free', 'height_cm': None, 'weight_kg': None, 'allergies': []}
+            save_user(st.session_state.user)
+            st.success('Signed in with Apple: ' + email)
+
 if not st.session_state.user:
-    tab1, tab2 = st.tabs(["Login", "Sign Up"])
-    with tab1:
-        st.subheader("Login")
-        login_email = st.text_input("Email", key="login_email")
-        login_pw = st.text_input("Password", type="password", key="login_pw")
-        if st.button("Login"):
-            u = authenticate(login_email.strip().lower(), login_pw)
-            if u:
-                st.session_state.user = u
-                st.success("Logged in — welcome!")
-                st.rerun()
-            else:
-                st.error("Invalid credentials")
-    with tab2:
-        st.subheader("Sign up (auto-login)")
-        signup_email = st.text_input("Email", key="signup_email")
-        signup_pw = st.text_input("Password", type="password", key="signup_pw")
-        if st.button("Sign Up"):
-            ok, err = create_user(signup_email.strip().lower(), signup_pw)
-            if ok:
-                st.session_state.user = get_user_by_email(signup_email.strip().lower())
-                st.success("Account created and logged in!")
-                st.rerun()
-            else:
-                st.error(err)
+    st.info('Please sign in or register in the box above to continue.')
     st.stop()
 
-# --- MAIN APP (logged in) ---
 user = st.session_state.user
-user_id = user[0]
-settings = get_settings(user_id)
 
-# apply theme and background
-apply_theme(settings.get("theme") or "light", settings.get("accent_color") or "#667eea")
-bg_blob, bg_mime = settings.get("background_blob"), settings.get("background_mime")
-if bg_blob:
-    render_background_from_blob(bg_blob, bg_mime)
+# -----------------------
+# Sidebar - Profile & Package
+# -----------------------
+with st.sidebar:
+    st.header('Profile')
+    st.write('Name:', user['name'])
+    st.write('Email:', user['email'])
+    package = st.selectbox('Choose package', ['Free', 'Premium', 'Pro'], index=['Free', 'Premium', 'Pro'].index(user.get('package', 'Free')))
+    if st.button('Save Package'):
+        user['package'] = package
+        save_user(user)
+        st.success('Package saved: ' + package)
 
-# Sidebar nav
-st.sidebar.markdown(f"**User:** {user[1]}")
-nav = st.sidebar.radio("Navigate", ["Home","Settings","Reminders","Saved Plans","Logout"])
+    st.markdown('---')
+    st.subheader('Order Watch')
+    watch_items = {
+        'VitalSync Band v1': 49.99,
+        'VitalSync Watch Pro': 129.99
+    }
+    choice = st.selectbox('Choose watch', list(watch_items.keys()))
+    qty = st.number_input('Quantity', min_value=1, value=1)
+    if st.button('Order Watch'):
+        price = watch_items[choice] * qty
+        oid = add_order(user['id'], f"{choice} x{qty}", price)
+        st.success(f'Order placed (mock). Order ID: {oid} — ${price:.2f}.')
 
-if nav == "Logout":
-    st.session_state.user = None
-    st.rerun()
+    st.markdown('---')
+    st.subheader('Timers')
+    ttype = st.selectbox('Timer type', ['Meal', 'Hydration', 'Medication', 'Workout'])
+    tlabel = st.text_input('Label', value=f'{ttype} reminder')
+    minutes = st.number_input('Minutes from now', min_value=1, value=60)
+    if st.button('Start Timer'):
+        tid = add_timer(user['id'], ttype, tlabel, minutes * 60)
+        st.success('Timer started. ID: ' + tid)
 
-# --- HOME ---
-if nav == "Home":
-    st.header("🏠 Personalized Planner")
-    col1, col2, col3 = st.columns([1.2,1,1])
-    with col1:
-        unit = st.selectbox("Weight unit", ["Kilograms (kg)","Pounds (lbs)"])
-        weight_input = st.number_input("Weight", min_value=0.1, max_value=999.9, value=70.0, format="%.1f")
-    with col2:
-        feet = st.number_input("Height (feet)", min_value=1, max_value=8, value=5)
-    with col3:
-        inches = st.number_input("Height (inches)", min_value=0, max_value=11, value=7)
+# -----------------------
+# Main - Dashboard and settings
+# -----------------------
+st.header('Dashboard')
+col1, col2 = st.columns([2, 1])
 
-    weight_kg = weight_input if unit.startswith("Kilograms") else lbs_to_kg(weight_input)
-    height_m = (feet*12 + inches) * 0.0254
-    bmi = bmi_calc(weight_kg, height_m) if height_m>0 else None
+with col1:
+    st.subheader('Health Inputs')
+    with st.form('health_form'):
+        height = st.number_input('Height (cm)', min_value=50.0, max_value=300.0, value=user.get('height_cm') or 170.0)
+        weight = st.number_input('Weight (kg)', min_value=20.0, max_value=500.0, value=user.get('weight_kg') or 70.0)
+        age = st.number_input('Age', min_value=5, max_value=120, value=30)
+        activity = st.selectbox('Activity Level', ['Sedentary', 'Light', 'Moderate', 'Active'])
+        goal = st.selectbox('Goal', ['maintain', 'lose', 'gain'])
+        allergies_input = st.text_input('Allergies / Dietary restrictions (comma separated)', value=','.join(user.get('allergies', [])))
+        submitted = st.form_submit_button('Save & Generate Meal Plan')
+        if submitted:
+            user['height_cm'] = float(height)
+            user['weight_kg'] = float(weight)
+            user['allergies'] = [a.strip() for a in allergies_input.split(',') if a.strip()]
+            save_user(user)
+            st.success('Profile saved. Generating meal plan...')
 
-    if bmi:
-        cat = "Underweight" if bmi < 18.5 else "Normal" if bmi < 25 else "Overweight" if bmi < 30 else "Obese"
-        st.metric("BMI", f"{bmi:.1f}", delta=cat)
-        maintenance = estimate_maintenance_calories(weight_kg)
-        target = maintenance + 500 if cat=="Underweight" else maintenance if cat=="Normal" else max(1200, maintenance-400) if cat=="Overweight" else max(1200, maintenance-600)
-        st.write(f"Estimated maintenance: **{maintenance} kcal/day** • Target: **{int(target)} kcal/day**")
-        if st.button("Generate Weekly Meal & Exercise Plan"):
-            weekly_meals = make_weekly_meal_plan(target)
-            weekly_ex = make_weekly_exercise_plan(cat)
-            plan = {"created":datetime.utcnow().isoformat(), "weight_kg":weight_kg, "height_m":height_m, "bmi":bmi, "bmi_category":cat, "target_kcal":int(target), "meals":weekly_meals, "exercise":weekly_ex}
-            st.session_state["latest_plan"] = plan
-            st.success("Plan generated — scroll down to view.")
+    # Meal plan display
+    if user.get('height_cm') and user.get('weight_kg'):
+        plan = generate_meal_plan(user['height_cm'], user['weight_kg'], user.get('allergies', []), goal=goal)
+        if plan:
+            st.subheader('Personalized Meal Plan (Sample)')
+            st.write(f"Estimated daily calories: {plan['calories']} kcal — Protein: {plan['protein_g']}g — Carbs: {plan['carbs_g']}g — Fats: {plan['fats_g']}g")
+            for m in plan['meals']:
+                st.markdown(f"**{m['name']}**")
+                for it in m['items']:
+                    st.write('- ' + it)
+    else:
+        st.info('Enter height and weight to get a personalized meal plan.')
 
-    if "latest_plan" in st.session_state:
-        p = st.session_state["latest_plan"]
-        st.subheader("Weekly Meal Plan")
-        for day, meals in p["meals"].items():
-            with st.expander(f"{day} — approx {sum(m['cal'] for m in meals.values())} kcal"):
-                for meal_name, meal_info in meals.items():
-                    st.write(f"- **{meal_name} ({meal_info['time']})**: {meal_info['item']} — **{meal_info['cal']} kcal**")
-        st.subheader("Weekly Exercise Plan")
-        for day, acts in p["exercise"].items():
-            with st.expander(day):
-                for a in acts:
-                    st.write(f"- {a['time']} — {a['activity']}")
-        colA, colB = st.columns(2)
-        with colA:
-            plan_name = st.text_input("Plan name", value=f"My plan {date.today()}")
-            if st.button("Save plan to account"):
-                c.execute("INSERT INTO saved_plans (user_id, name, created_at, plan_json) VALUES (?, ?, ?, ?)",
-                          (user_id, plan_name, datetime.utcnow().isoformat(), json.dumps(p)))
-                conn.commit()
-                st.success("Plan saved to your account.")
-        with colB:
-            st.download_button("Download plan (JSON)", data=json.dumps(p, indent=2), file_name="weekly_plan.json", mime="application/json")
-
-# --- SETTINGS ---
-elif nav == "Settings":
-    st.header("⚙️ Settings & Customization")
-    st.write("Customize theme, pick accent color, upload a background (drag & drop), and optionally configure SMTP for email reminders.")
-    theme_choice = st.selectbox("Theme", ["light","dark"], index=0 if settings.get("theme","light")=="light" else 1)
-    accent = st.color_picker("Accent color", settings.get("accent_color") or "#667eea")
-    uploaded = st.file_uploader("Upload background image (jpg/png) — drag & drop supported", type=["jpg","jpeg","png"])
-    st.markdown("#### Optional: SMTP (used to send reminders)")
-    smtp_host = st.text_input("SMTP host (e.g. smtp.gmail.com)", value=settings.get("smtp_host") or "")
-    smtp_port = st.number_input("SMTP port", value=int(settings.get("smtp_port") or 587))
-    smtp_email = st.text_input("SMTP login email", value=settings.get("smtp_email") or "")
-    smtp_password = st.text_input("SMTP password (will be stored)", type="password", value=settings.get("smtp_password") or "")
-
-    if st.button("Save Settings"):
-        blob = None
-        mime = None
-        if uploaded:
-            blob = uploaded.read()
-            mime = mimetypes.guess_type(uploaded.name)[0] or "image/png"
-        smtp = {"host": smtp_host or None, "port": smtp_port or None, "email": smtp_email or None, "password": smtp_password or None}
-        save_settings(user_id, theme_choice, accent, smtp=smtp, bg_blob=blob, bg_mime=mime)
-        st.success("Settings saved. Theme/background will apply after reload.")
-        st.rerun()
-
-# --- REMINDERS ---
-elif nav == "Reminders":
-    st.header("⏰ Reminders")
-    st.info("Save reminders (scheduled) or Send Now using SMTP credentials in Settings.")
-    title = st.text_input("Title")
-    message = st.text_area("Message")
-    recipient = st.text_input("Recipient email", value=user[1])
-    send_date = st.date_input("Send date", value=date.today())
-    send_time = st.time_input("Send time (UTC)", value=(datetime.utcnow() + timedelta(minutes=1)).time().replace(second=0,microsecond=0))
-    send_dt = datetime.combine(send_date, send_time)
-    if st.button("Save reminder"):
-        save_reminder(user_id, title, message, recipient, send_dt.isoformat())
-        st.success("Reminder saved.")
-    if st.button("Send now using saved SMTP"):
-        s = get_settings(user_id)
-        if not (s.get("smtp_host") and s.get("smtp_email") and s.get("smtp_password")):
-            st.error("SMTP not configured. Add SMTP settings in Settings page.")
+    st.markdown('---')
+    st.subheader('Workout Timer (Embedded)')
+    st.write('Simple workout timer that counts down (runs while the page is open).')
+    if 'workout_end' not in st.session_state:
+        st.session_state['workout_end'] = None
+    w_minutes = st.number_input('Workout minutes', min_value=1, max_value=180, value=20)
+    if st.button('Start Workout Timer (page must remain open)'):
+        st.session_state['workout_end'] = time.time() + w_minutes * 60
+    if st.session_state['workout_end']:
+        rem = int(st.session_state['workout_end'] - time.time())
+        if rem > 0:
+            st.info(f'Workout time remaining: {timedelta(seconds=rem)}')
         else:
-            try:
-                send_email_via_smtp(s["smtp_host"], s.get("smtp_port") or 587, s["smtp_email"], s["smtp_password"], recipient, title or "Reminder", message or "")
-                st.success("Email sent.")
-            except Exception as e:
-                st.error(f"Failed to send email: {e}")
+            st.success('Workout complete!')
+            st.session_state['workout_end'] = None
 
-    st.markdown("---")
-    st.subheader("Pending reminders")
-    pending = list_reminders(user_id, include_sent=False)
-    if pending:
-        for rid, t, rec, send_at, sent in pending:
-            st.write(f"- **{t}** → {rec} at {send_at}")
-            c1, c2 = st.columns([1,1])
-            if c1.button("Send now", key=f"send_{rid}"):
-                s = get_settings(user_id)
-                if not (s.get("smtp_host") and s.get("smtp_email") and s.get("smtp_password")):
-                    st.error("Set SMTP in Settings first.")
-                else:
-                    try:
-                        send_email_via_smtp(s["smtp_host"], s.get("smtp_port") or 587, s["smtp_email"], s["smtp_password"], rec, t or "Reminder", "Scheduled reminder")
-                        mark_reminder_sent(rid)
-                        st.success("Sent & marked as sent.")
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"Failed: {e}")
-            if c2.button("Delete", key=f"del_{rid}"):
-                c.execute("DELETE FROM reminders WHERE id=?", (rid,))
-                conn.commit()
-                st.rerun()
+with col2:
+    st.subheader('Active Timers')
+    timers = get_timers(user['id'])
+    if not timers:
+        st.write('No active timers.')
     else:
-        st.write("No pending reminders.")
+        for t in timers:
+            tid, ttype, label, end_ts = t
+            rem = int(end_ts - time.time())
+            if rem > 0:
+                st.write(f"[{ttype}] {label} — remaining: {timedelta(seconds=rem)}")
+                if st.button(f'Cancel {label}', key='cancel_'+tid):
+                    remove_timer(tid)
+                    st.experimental_rerun()
+            else:
+                st.warning(f'[{ttype}] {label} — READY (click to remove)')
+                if st.button(f'Remove {label}', key='remove_'+tid):
+                    remove_timer(tid)
+                    st.experimental_rerun()
 
-    st.markdown("---")
-    if st.button("Check & send due reminders (now)"):
-        res = check_and_send_due_reminders()
-        st.success(f"Sent: {res['sent']}, Failed/Skipped: {res['failed']}")
-
-# --- SAVED PLANS ---
-elif nav == "Saved Plans":
-    st.header("💾 Saved Plans")
-    c.execute("SELECT id, name, created_at FROM saved_plans WHERE user_id=? ORDER BY id DESC", (user_id,))
-    rows = c.fetchall()
-    if rows:
-        for pid, name, created in rows:
-            st.write(f"**{name}** — {created}")
-            col1, col2 = st.columns([1,1])
-            if col1.button("Load", key=f"load_{pid}"):
-                c.execute("SELECT plan_json FROM saved_plans WHERE id=?", (pid,))
-                r = c.fetchone()
-                if r:
-                    st.session_state["latest_plan"] = json.loads(r[0])
-                    st.success("Plan loaded into view.")
-                    st.rerun()
-            if col2.button("Delete", key=f"delplan_{pid}"):
-                c.execute("DELETE FROM saved_plans WHERE id=?", (pid,))
-                conn.commit()
-                st.rerun()
+    st.markdown('---')
+    st.subheader('Orders')
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute('SELECT id, product, price, created_at FROM orders WHERE user_id=? ORDER BY created_at DESC', (user['id'],))
+    orders = c.fetchall()
+    conn.close()
+    if not orders:
+        st.write('No orders yet.')
     else:
-        st.write("No saved plans yet.")
+        for o in orders:
+            st.write(f'Order {o[0]} — {o[1]} — ${o[2]:.2f} — {o[3]}')
+
+st.markdown('---')
+st.caption('This prototype is for demonstration. Implement real OAuth, payment gateways, and wearable SDKs for production.')

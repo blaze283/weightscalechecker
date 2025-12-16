@@ -1,11 +1,3 @@
-
-Create Android Workout App with Python
-Create Android Workout App with Python
-create a code for a fully functioning workout app for Android using python coding language 
-I'll help you create a workout app for Android using Python with Kivy or BeeWare. Since Python isn't natively supported on Android, we'll use KivyMD for a Material Design interface. Here's a complete workout app:
-
-1. Main App Structure (main.py)
-python
 from kivymd.app import MDApp
 from kivy.lang import Builder
 from kivy.uix.screenmanager import ScreenManager, Screen
@@ -7120,4 +7112,5 @@ class DataEncryptor:
         data = unpadder.update(decrypted_padded) + unpadder.finalize()
         
         return data.decode()
+
 

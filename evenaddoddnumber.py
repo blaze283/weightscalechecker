@@ -138,7 +138,6 @@ class WorkoutApp(MDApp):
 
 if __name__ == '__main__':
     WorkoutApp().run()
-2. KV Language File (workout.kv)
 kv
 #:import Clock kivy.clock.Clock
 
@@ -7112,5 +7111,6 @@ class DataEncryptor:
         data = unpadder.update(decrypted_padded) + unpadder.finalize()
         
         return data.decode()
+
 
 
